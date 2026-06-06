@@ -1,4 +1,4 @@
-# War of Dots — Project Context
+# War of Spheres — Project Context
 
 This document captures the original brief and references used when starting the project.
 

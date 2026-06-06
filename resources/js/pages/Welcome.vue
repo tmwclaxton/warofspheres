@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import { Head, Link, usePage } from '@inertiajs/vue3';
 import { computed } from 'vue';
+import {
+    Castle,
+    Eye,
+    PencilLine,
+    Swords,
+    Users,
+} from 'lucide-vue-next';
 import { Button } from '@/components/ui/button';
 import { dashboard, login } from '@/routes';
 import { index as gamesIndex } from '@/routes/games';
@@ -18,128 +25,222 @@ const page = usePage();
 const dashboardUrl = computed(() =>
     page.props.currentTeam ? dashboard(page.props.currentTeam.slug).url : '/',
 );
+
+const features = [
+    {
+        icon: Users,
+        title: '2–6 commanders',
+        description:
+            'Create a lobby or join with a code. Every player gets a color and a corner of the map.',
+    },
+    {
+        icon: PencilLine,
+        title: 'Plan, then strike',
+        description:
+            'Draw movement paths for troops and cities, then commit your orders in one decisive push.',
+    },
+    {
+        icon: Eye,
+        title: 'Fog of war',
+        description:
+            'Terrain, borders, and vision shift as armies move. You only see what your forces reveal.',
+    },
+    {
+        icon: Castle,
+        title: 'Cities & terrain',
+        description:
+            'Hills slow you down, mountains block you, water weakens attacks. Cities are worth fighting for.',
+    },
+] as const;
+
+const steps = [
+    {
+        number: '01',
+        title: 'Join a lobby',
+        description: 'Host a match or enter a six-character code to rally your rivals.',
+    },
+    {
+        number: '02',
+        title: 'Draft your advance',
+        description: 'Sketch paths across the map before anyone moves a single sphere.',
+    },
+    {
+        number: '03',
+        title: 'Execute & adapt',
+        description: 'Commit orders, watch the clash unfold, and redraw as the front line shifts.',
+    },
+] as const;
 </script>
 
 <template>
-    <Head title="War of Dots">
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link
-            href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60;600&display=swap"
-            rel="stylesheet"
+    <Head title="War of Spheres" />
+
+    <div class="relative overflow-hidden bg-[#e8dfc8] text-[#1a1814]">
+        <div
+            class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,#f7f1e3_0%,transparent_45%),radial-gradient(circle_at_80%_0%,#d4c4a0_0%,transparent_35%),radial-gradient(circle_at_50%_100%,#c8d68a_0%,transparent_40%)]"
+            aria-hidden="true"
         />
-    </Head>
-
-    <div
-        class="min-h-screen bg-[#e8dfc8] text-[#1a1814]"
-        style="font-family: 'Source Serif 4', Georgia, serif"
-    >
-        <header class="mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
-            <p
-                class="text-lg tracking-[0.2em] uppercase"
-                style="font-family: Cinzel, serif"
+        <div class="relative flex min-h-svh flex-col">
+        <header
+            class="relative shrink-0 border-b border-[#1a1814]/10 bg-[#f7f1e3]/80 backdrop-blur-sm"
+        >
+            <div
+                class="mx-auto flex max-w-6xl items-center justify-between px-6 py-5"
             >
-                War of Dots
-            </p>
-            <nav class="flex gap-3">
-                <Link v-if="page.props.auth.user" :href="gamesIndex().url">
-                    <Button>Play Now</Button>
-                </Link>
-                <Link v-else :href="login()">
-                    <Button>Log in to play</Button>
-                </Link>
-            </nav>
-        </header>
-
-        <main class="mx-auto grid max-w-6xl gap-10 px-6 pb-16 lg:grid-cols-2 lg:items-center">
-            <section class="space-y-6">
-                <p class="text-sm uppercase tracking-[0.35em] text-[#5c5346]">
-                    Strategic multiplayer
-                </p>
-                <h1
-                    class="text-4xl leading-tight md:text-5xl"
-                    style="font-family: Cinzel, serif"
-                >
-                    Command. Conquer. Dominate.
-                </h1>
-                <p class="max-w-xl text-lg text-[#3d362b]">
-                    A barebones real-time strategy game inspired by
-                    <em>War of Dots</em> and the tactical clarity of Historia Civilis.
-                    Plan your advance like a campaign map, then commit your orders and
-                    watch the dots clash across procedurally generated terrain.
-                </p>
-                <ul class="space-y-2 text-[#3d362b]">
-                    <li>2–6 players per match</li>
-                    <li>Draw attack paths before you execute</li>
-                    <li>Fog of war, cities, borders, and terrain that matters</li>
-                </ul>
-                <div class="flex flex-wrap gap-3">
+                <div class="flex items-center gap-3">
+                    <div
+                        class="flex size-10 items-center justify-center rounded-full border-2 border-[#1a1814]/15 bg-[#e8dfc8] shadow-[3px_3px_0_#1a1814]/10"
+                    >
+                        <Swords class="size-5" />
+                    </div>
+                    <div>
+                        <p class="text-lg font-bold tracking-[0.15em] uppercase">
+                            War of Spheres
+                        </p>
+                        <p class="text-xs tracking-[0.2em] text-[#5c5346] uppercase">
+                            Tactical multiplayer RTS
+                        </p>
+                    </div>
+                </div>
+                <nav class="flex gap-3">
                     <Link v-if="page.props.auth.user" :href="gamesIndex().url">
-                        <Button size="lg">Enter the battlefield</Button>
+                        <Button>Play Now</Button>
                     </Link>
                     <Link v-else :href="login()">
-                        <Button size="lg">Log in with WorkOS</Button>
+                        <Button>Log in to play</Button>
                     </Link>
-                    <Link v-if="page.props.auth.user" :href="dashboardUrl">
-                        <Button size="lg" variant="outline">Dashboard</Button>
-                    </Link>
+                </nav>
+            </div>
+        </header>
+
+        <section class="relative flex flex-1 flex-col justify-center">
+            <div class="mx-auto w-full max-w-6xl px-6 py-10">
+                <div class="max-w-3xl">
+                    <p
+                        class="inline-flex rounded-full border border-[#1a1814]/15 bg-[#f7f1e3] px-4 py-1.5 text-xs font-bold tracking-[0.3em] text-[#5c5346] uppercase"
+                    >
+                        Strategic multiplayer
+                    </p>
+                    <h1
+                        class="mt-6 text-5xl leading-[1.05] font-bold tracking-tight md:text-7xl"
+                    >
+                        Draw the plan.
+                        <span class="block text-[#5c5346]">Win the war.</span>
+                    </h1>
+                    <p class="mt-6 max-w-2xl text-lg leading-relaxed text-[#3d362b] md:text-xl">
+                        A real-time strategy game inspired by
+                        <em>War of Dots</em> and the tactical clarity of
+                        Historia Civilis. Commit your orders, then watch spheres
+                        clash across procedurally generated battlefields.
+                    </p>
+                    <div class="mt-8 flex flex-wrap gap-3">
+                        <Link v-if="page.props.auth.user" :href="gamesIndex().url">
+                            <Button size="lg" class="h-12 px-8 text-base">
+                                Enter the battlefield
+                            </Button>
+                        </Link>
+                        <Link v-else :href="login()">
+                            <Button size="lg" class="h-12 px-8 text-base">
+                                Log in with WorkOS
+                            </Button>
+                        </Link>
+                        <Link
+                            v-if="page.props.auth.user"
+                            :href="dashboardUrl"
+                        >
+                            <Button
+                                size="lg"
+                                variant="outline"
+                                class="h-12 border-[#1a1814]/20 bg-[#f7f1e3]/60 px-8 text-base"
+                            >
+                                Dashboard
+                            </Button>
+                        </Link>
+                    </div>
                 </div>
+            </div>
+        </section>
+        </div>
+
+        <main class="relative mx-auto max-w-6xl px-6 pb-20">
+            <section class="grid gap-4 sm:grid-cols-2">
+                <article
+                    v-for="feature in features"
+                    :key="feature.title"
+                    class="rounded-2xl border border-[#1a1814]/15 bg-[#f7f1e3]/80 p-6 shadow-[6px_6px_0_#1a1814]/8 transition-transform hover:-translate-y-0.5"
+                >
+                    <div
+                        class="mb-4 flex size-11 items-center justify-center rounded-xl border border-[#1a1814]/10 bg-[#e8dfc8]"
+                    >
+                        <component :is="feature.icon" class="size-5" />
+                    </div>
+                    <h2 class="text-xl font-bold">{{ feature.title }}</h2>
+                    <p class="mt-2 text-[#3d362b] leading-relaxed">
+                        {{ feature.description }}
+                    </p>
+                </article>
             </section>
 
             <section
-                class="relative aspect-[16/10] overflow-hidden rounded-2xl border-2 border-[#1a1814]/20 bg-[#c8d68a] shadow-[8px_8px_0_#1a1814]/10"
-                aria-hidden="true"
+                class="mt-16 rounded-3xl border border-[#1a1814]/15 bg-[#1a1814] p-8 text-[#f7f1e3] md:p-12"
             >
-                <svg viewBox="0 0 640 400" class="h-full w-full">
-                    <rect width="640" height="400" fill="#c8d68a" />
-                    <ellipse cx="120" cy="280" rx="90" ry="55" fill="#3d6b45" />
-                    <ellipse cx="500" cy="120" rx="110" ry="70" fill="#3d6b45" />
-                    <path
-                        d="M0 220 C160 180, 220 260, 320 200 S520 120, 640 160 L640 240 C520 260, 420 300, 320 280 S120 320, 0 300 Z"
-                        fill="#4a90d9"
-                    />
-                    <polygon
-                        points="300,60 340,120 260,120"
-                        fill="#5a5a5a"
-                    />
-                    <circle cx="180" cy="180" r="6" fill="#c0392b" />
-                    <circle cx="200" cy="190" r="6" fill="#c0392b" />
-                    <circle cx="220" cy="185" r="6" fill="#c0392b" />
-                    <circle cx="420" cy="210" r="6" fill="#2980b9" />
-                    <circle cx="440" cy="220" r="6" fill="#2980b9" />
-                    <circle cx="460" cy="215" r="6" fill="#2980b9" />
-                    <polygon
-                        points="310,250 318,266 302,266"
-                        fill="#f1c40f"
-                        stroke="#1a1a1a"
-                        stroke-width="1"
-                    />
-                    <path
-                        d="M200 185 Q260 150, 310 250"
-                        fill="none"
-                        stroke="#1a1a1a"
-                        stroke-width="3"
-                        marker-end="url(#arrow)"
-                    />
-                    <path
-                        d="M440 215 Q380 170, 330 255"
-                        fill="none"
-                        stroke="#1a1a1a"
-                        stroke-width="3"
-                    />
-                    <defs>
-                        <marker
-                            id="arrow"
-                            markerWidth="8"
-                            markerHeight="8"
-                            refX="6"
-                            refY="3"
-                            orient="auto"
-                        >
-                            <path d="M0,0 L6,3 L0,6 Z" fill="#1a1a1a" />
-                        </marker>
-                    </defs>
-                </svg>
+                <div class="max-w-2xl">
+                    <p class="text-xs font-bold tracking-[0.35em] text-[#e8dfc8]/70 uppercase">
+                        How it plays
+                    </p>
+                    <h2 class="mt-3 text-3xl font-bold md:text-4xl">
+                        Three moves to your first campaign
+                    </h2>
+                </div>
+                <ol class="mt-10 grid gap-8 md:grid-cols-3">
+                    <li
+                        v-for="step in steps"
+                        :key="step.number"
+                        class="border-t border-[#f7f1e3]/15 pt-6"
+                    >
+                        <p class="text-sm font-bold tracking-[0.25em] text-[#c8d68a]">
+                            {{ step.number }}
+                        </p>
+                        <h3 class="mt-3 text-xl font-bold">{{ step.title }}</h3>
+                        <p class="mt-2 text-[#e8dfc8]/80 leading-relaxed">
+                            {{ step.description }}
+                        </p>
+                    </li>
+                </ol>
+            </section>
+
+            <section
+                class="mt-16 flex flex-col items-start justify-between gap-6 rounded-2xl border-2 border-[#1a1814]/15 bg-[#f7f1e3] p-8 md:flex-row md:items-center"
+            >
+                <div>
+                    <h2 class="text-2xl font-bold md:text-3xl">
+                        Ready when you are.
+                    </h2>
+                    <p class="mt-2 max-w-xl text-[#3d362b]">
+                        No downloads, no installs — just log in, find a lobby,
+                        and start drawing your advance.
+                    </p>
+                </div>
+                <Link
+                    v-if="page.props.auth.user"
+                    :href="gamesIndex().url"
+                >
+                    <Button size="lg" class="h-12 px-8 text-base">
+                        Browse lobbies
+                    </Button>
+                </Link>
+                <Link v-else :href="login()">
+                    <Button size="lg" class="h-12 px-8 text-base">
+                        Get started
+                    </Button>
+                </Link>
             </section>
         </main>
+
+        <footer
+            class="relative border-t border-[#1a1814]/10 bg-[#f7f1e3]/60 px-6 py-6 text-center text-sm text-[#5c5346]"
+        >
+            <p>War of Spheres — plan first, fight second.</p>
+        </footer>
     </div>
 </template>

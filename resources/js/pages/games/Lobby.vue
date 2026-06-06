@@ -54,7 +54,7 @@ function joinLobby() {
 
     <div class="flex flex-col gap-8">
         <Heading
-            title="War of Dots"
+            title="War of Spheres"
             description="Create or join a quick match. Up to six commanders per battle."
         />
 

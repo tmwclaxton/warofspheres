@@ -42,7 +42,7 @@ onUnmounted(() => {
             class="flex items-center justify-between border-b border-[#1a1814]/10 bg-[#f7f1e3] px-4 py-3"
         >
             <div>
-                <p class="text-xs uppercase tracking-[0.25em]">War of Dots</p>
+                <p class="text-xs uppercase tracking-[0.25em]">War of Spheres</p>
                 <p class="font-mono text-sm">{{ game.code }}</p>
             </div>
             <div class="flex items-center gap-2">
