@@ -1,12 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import {
-    MAP_EDITOR_MAX_ZOOM,
-    MAP_EDITOR_MIN_ZOOM,
-    type MapEditorInstance,
-} from '@/composables/useMapEditor';
-import { MAP_CELL_COLS, MAP_CELL_ROWS } from '@/lib/mapEditorGrid';
-import { drawBridgeOverlay, editorTerrainFillStyle } from '@/lib/terrainRender';
+import { MAP_EDITOR_MAX_ZOOM, MAP_EDITOR_MIN_ZOOM, type MapEditorInstance } from '@/composables/useMapEditor';
+import { drawBridgeOverlay, editorBlendedTerrainFillStyle } from '@/lib/terrainRender';
 
 const props = defineProps<{
     editor: MapEditorInstance;
@@ -17,7 +12,10 @@ let painting = false;
 let panning = false;
 let lastMouse: [number, number] = [0, 0];
 let resizeObserver: ResizeObserver | null = null;
-let resizeRaf = 0;
+
+/** Coalesces multiple invalidations (Vue watch + pointer events) into one paint per frame. */
+let renderRaf = 0;
+let renderPending = false;
 
 /** Canvas / void outside the playable grid (letterbox). */
 const VIEWPORT_VOID = '#a8ad9a';
@@ -34,7 +32,9 @@ function worldToGrid(wx: number, wy: number): [number, number] | null {
     const cs = props.editor.cellSize;
     const gx = Math.floor(wx / cs);
     const gy = Math.floor(wy / cs);
-    if (gx < 0 || gx >= MAP_CELL_ROWS || gy < 0 || gy >= MAP_CELL_COLS) {
+    const nRows = props.editor.gridRows.value;
+    const nCols = props.editor.gridCols.value;
+    if (gx < 0 || gx >= nRows || gy < 0 || gy >= nCols) {
         return null;
     }
 
@@ -53,28 +53,55 @@ function applyFitToViewport(): void {
     props.editor.fitMapToView(r.width, r.height);
 }
 
+function scheduleDraw(): void {
+    if (renderPending) {
+        return;
+    }
+    renderPending = true;
+    renderRaf = requestAnimationFrame(() => {
+        renderPending = false;
+        renderRaf = 0;
+        draw();
+    });
+}
+
+function cancelScheduledDraw(): void {
+    if (renderRaf !== 0) {
+        cancelAnimationFrame(renderRaf);
+        renderRaf = 0;
+    }
+    renderPending = false;
+}
+
 function draw(): void {
     const canvas = canvasRef.value;
     if (!canvas) {
         return;
     }
 
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) {
         return;
     }
 
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
+    const nextW = Math.max(1, Math.round(rect.width * dpr));
+    const nextH = Math.max(1, Math.round(rect.height * dpr));
+    if (canvas.width !== nextW || canvas.height !== nextH) {
+        canvas.width = nextW;
+        canvas.height = nextH;
+    }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
 
     const cs = props.editor.cellSize;
     const cells = props.editor.cells.value;
     const bridges = props.editor.bridges.value;
-    const ww = props.editor.worldWidth;
-    const wh = props.editor.worldHeight;
+    const ww = props.editor.worldWidth.value;
+    const wh = props.editor.worldHeight.value;
+    const nRows = props.editor.gridRows.value;
+    const nCols = props.editor.gridCols.value;
 
     ctx.fillStyle = VIEWPORT_VOID;
     ctx.fillRect(0, 0, rect.width, rect.height);
@@ -87,31 +114,16 @@ function draw(): void {
     ctx.fillStyle = WORKSPACE_FILL;
     ctx.fillRect(-margin, -margin, ww + 2 * margin, wh + 2 * margin);
 
-    for (let gy = 0; gy < MAP_CELL_COLS; gy++) {
-        for (let gx = 0; gx < MAP_CELL_ROWS; gx++) {
+    for (let gy = 0; gy < nCols; gy++) {
+        for (let gx = 0; gx < nRows; gx++) {
             const px = gx * cs;
             const py = gy * cs;
-            ctx.fillStyle = editorTerrainFillStyle(cells[gx][gy]);
+            ctx.fillStyle = editorBlendedTerrainFillStyle(cells, gx, gy);
             ctx.fillRect(px, py, cs, cs);
             if (bridges[gx][gy]) {
                 drawBridgeOverlay(ctx, px, py, cs);
             }
         }
-    }
-
-    ctx.strokeStyle = '#1a1a1a';
-    ctx.lineWidth = 1 / props.editor.zoom.value;
-    for (let gy = 0; gy <= MAP_CELL_COLS; gy++) {
-        ctx.beginPath();
-        ctx.moveTo(0, gy * cs);
-        ctx.lineTo(ww, gy * cs);
-        ctx.stroke();
-    }
-    for (let gx = 0; gx <= MAP_CELL_ROWS; gx++) {
-        ctx.beginPath();
-        ctx.moveTo(gx * cs, 0);
-        ctx.lineTo(gx * cs, wh);
-        ctx.stroke();
     }
 
     ctx.restore();
@@ -149,7 +161,7 @@ function onPointerDown(e: PointerEvent): void {
 
     if (props.editor.activeTool.value === 'fill' || props.editor.activeTool.value === 'bridge') {
         props.editor.clickTool(gx, gy);
-        draw();
+        scheduleDraw();
 
         return;
     }
@@ -158,7 +170,7 @@ function onPointerDown(e: PointerEvent): void {
     props.editor.beginStroke();
     props.editor.strokePaint(gx, gy);
     canvas.setPointerCapture(e.pointerId);
-    draw();
+    scheduleDraw();
 }
 
 function onPointerMove(e: PointerEvent): void {
@@ -175,7 +187,7 @@ function onPointerMove(e: PointerEvent): void {
         props.editor.camX.value += (sx - lastMouse[0]) / props.editor.zoom.value;
         props.editor.camY.value += (sy - lastMouse[1]) / props.editor.zoom.value;
         lastMouse = [sx, sy];
-        draw();
+        scheduleDraw();
 
         return;
     }
@@ -188,7 +200,7 @@ function onPointerMove(e: PointerEvent): void {
     const grid = worldToGrid(world[0], world[1]);
     if (grid) {
         props.editor.strokePaint(grid[0], grid[1]);
-        draw();
+        scheduleDraw();
     }
 }
 
@@ -211,7 +223,7 @@ function onWheel(e: WheelEvent): void {
         MAP_EDITOR_MAX_ZOOM,
         Math.max(MAP_EDITOR_MIN_ZOOM, props.editor.zoom.value * factor),
     );
-    draw();
+    scheduleDraw();
 }
 
 function onKeyDown(e: KeyboardEvent): void {
@@ -231,7 +243,7 @@ function onKeyDown(e: KeyboardEvent): void {
         } else {
             props.editor.undo();
         }
-        draw();
+        scheduleDraw();
     }
     if (e.key === '[') {
         e.preventDefault();
@@ -246,10 +258,7 @@ function onKeyDown(e: KeyboardEvent): void {
 onMounted(() => {
     window.addEventListener('keydown', onKeyDown);
     resizeObserver = new ResizeObserver(() => {
-        cancelAnimationFrame(resizeRaf);
-        resizeRaf = requestAnimationFrame(() => {
-            draw();
-        });
+        scheduleDraw();
     });
     if (canvasRef.value) {
         resizeObserver.observe(canvasRef.value);
@@ -264,7 +273,7 @@ onUnmounted(() => {
     window.removeEventListener('keydown', onKeyDown);
     resizeObserver?.disconnect();
     resizeObserver = null;
-    cancelAnimationFrame(resizeRaf);
+    cancelScheduledDraw();
 });
 
 watch(
@@ -272,7 +281,7 @@ watch(
     () => {
         void nextTick(() => {
             applyFitToViewport();
-            draw();
+            scheduleDraw();
         });
     },
     { flush: 'post' },
@@ -280,14 +289,12 @@ watch(
 
 watch(
     () => [
-        props.editor.cells.value,
-        props.editor.bridges.value,
+        props.editor.terrainEpoch.value,
         props.editor.zoom.value,
         props.editor.camX.value,
         props.editor.camY.value,
     ],
-    () => draw(),
-    { deep: true },
+    () => scheduleDraw(),
 );
 </script>
 

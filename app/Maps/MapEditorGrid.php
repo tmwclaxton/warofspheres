@@ -9,27 +9,57 @@ use App\Games\GameConstants;
  */
 final class MapEditorGrid
 {
-    public const int CELL_ROWS = GameConstants::ROWS + 1;
+    /** Live battlefield vertex grid (GameConstants rows+1 / cols+1). */
+    public const int LIVE_BATTLEFIELD_CELL_ROWS = GameConstants::ROWS + 1;
 
-    public const int CELL_COLS = GameConstants::COLS + 1;
+    public const int LIVE_BATTLEFIELD_CELL_COLS = GameConstants::COLS + 1;
+
+    /**
+     * Default new-map vertex grid in the builder: 3× the live battlefield so the canvas starts larger.
+     */
+    public const int CELL_ROWS = self::LIVE_BATTLEFIELD_CELL_ROWS * 3;
+
+    public const int CELL_COLS = self::LIVE_BATTLEFIELD_CELL_COLS * 3;
+
+    public const int MIN_CELL_ROWS = 4;
+
+    public const int MAX_CELL_ROWS = 256;
+
+    public const int MIN_CELL_COLS = 4;
+
+    public const int MAX_CELL_COLS = 256;
+
+    public static function dimensionsAreAllowed(int $cellRows, int $cellCols): bool
+    {
+        return $cellRows >= self::MIN_CELL_ROWS
+            && $cellRows <= self::MAX_CELL_ROWS
+            && $cellCols >= self::MIN_CELL_COLS
+            && $cellCols <= self::MAX_CELL_COLS;
+    }
 
     /**
      * @return array{version: int, cellRows: int, cellCols: int, cells: list<list<string>>, bridges: list<list<bool>>}
      */
-    public static function emptyData(): array
+    public static function emptyData(?int $cellRows = null, ?int $cellCols = null): array
     {
+        $rows = $cellRows ?? self::CELL_ROWS;
+        $cols = $cellCols ?? self::CELL_COLS;
+        if (! self::dimensionsAreAllowed($rows, $cols)) {
+            throw new \InvalidArgumentException("Map dimensions {$rows}×{$cols} are not allowed.");
+        }
+
         $cells = [];
         $bridges = [];
 
-        for ($r = 0; $r < self::CELL_ROWS; $r++) {
-            $cells[$r] = array_fill(0, self::CELL_COLS, 'plains');
-            $bridges[$r] = array_fill(0, self::CELL_COLS, false);
+        for ($r = 0; $r < $rows; $r++) {
+            $cells[$r] = array_fill(0, $cols, 'plains');
+            $bridges[$r] = array_fill(0, $cols, false);
         }
 
         return [
             'version' => 1,
-            'cellRows' => self::CELL_ROWS,
-            'cellCols' => self::CELL_COLS,
+            'cellRows' => $rows,
+            'cellCols' => $cols,
             'cells' => $cells,
             'bridges' => $bridges,
         ];

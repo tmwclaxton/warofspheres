@@ -2,9 +2,26 @@ import {
     BRIDGE_PLANK_COLOR,
     BRIDGE_RAIL_COLOR,
     EDITOR_TERRAIN_COLORS,
+    TERRAIN_IDS,
     type TerrainId,
     isTerrainId,
 } from '@/lib/terrainCatalog';
+
+function hexToRgbTuple(hex: string): readonly [number, number, number] {
+    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
+    if (!m) {
+        return [200, 214, 138];
+    }
+
+    return [Number.parseInt(m[1], 16), Number.parseInt(m[2], 16), Number.parseInt(m[3], 16)] as const;
+}
+
+/** Editor terrain RGB — built once from {@link EDITOR_TERRAIN_COLORS} for fast canvas fills. */
+export const EDITOR_TERRAIN_RGB: Record<TerrainId, readonly [number, number, number]> = Object.fromEntries(
+    TERRAIN_IDS.map((id) => [id, hexToRgbTuple(EDITOR_TERRAIN_COLORS[id])] as const),
+) as Record<TerrainId, readonly [number, number, number]>;
+
+const PLAINS_RGB = EDITOR_TERRAIN_RGB.plains;
 
 /** Engine marching-squares classification (matches GameCanvas / Environment). */
 export const ENGINE_TERRAIN_VALUES: Record<string, number> = {
@@ -58,6 +75,72 @@ export function editorTerrainFillStyle(terrain: string): string {
     }
 
     return EDITOR_TERRAIN_COLORS[terrain as TerrainId];
+}
+
+export function editorTerrainRgb(terrain: string): readonly [number, number, number] {
+    return isTerrainId(terrain) ? EDITOR_TERRAIN_RGB[terrain] : PLAINS_RGB;
+}
+
+function clamp255(n: number): number {
+    return Math.max(0, Math.min(255, Math.round(n)));
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+    return `#${clamp255(r).toString(16).padStart(2, '0')}${clamp255(g).toString(16).padStart(2, '0')}${clamp255(b).toString(16).padStart(2, '0')}`;
+}
+
+/**
+ * Softens biome boundaries in the map editor by mixing the cell color with neighbor terrain colors.
+ */
+export function editorBlendedTerrainFillStyle(
+    cells: string[][],
+    gx: number,
+    gy: number,
+    neighborBlend = 0.34,
+): string {
+    const rows = cells.length;
+    const cols = cells[0]?.length ?? 0;
+    const center = editorTerrainRgb(cells[gx][gy]);
+
+    let sr = 0;
+    let sg = 0;
+    let sb = 0;
+    let n = 0;
+    const dirs = [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+        [1, 1],
+        [1, -1],
+        [-1, 1],
+        [-1, -1],
+    ];
+    for (const [dx, dy] of dirs) {
+        const x = gx + dx;
+        const y = gy + dy;
+        if (x < 0 || x >= rows || y < 0 || y >= cols) {
+            continue;
+        }
+        const rgb = editorTerrainRgb(cells[x][y]);
+        sr += rgb[0];
+        sg += rgb[1];
+        sb += rgb[2];
+        n++;
+    }
+    if (n === 0) {
+        return rgbToHex(center[0], center[1], center[2]);
+    }
+    const t = neighborBlend;
+    const ar = sr / n;
+    const ag = sg / n;
+    const ab = sb / n;
+
+    return rgbToHex(
+        (1 - t) * center[0] + t * ar,
+        (1 - t) * center[1] + t * ag,
+        (1 - t) * center[2] + t * ab,
+    );
 }
 
 export function drawBridgeOverlay(

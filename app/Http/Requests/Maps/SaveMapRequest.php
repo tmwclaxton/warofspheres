@@ -51,8 +51,8 @@ class SaveMapRequest extends FormRequest
             'name' => ['required', 'string', 'max:120'],
             'data' => ['required', 'array'],
             'data.version' => ['required', 'integer', Rule::in([1])],
-            'data.cellRows' => ['required', 'integer', Rule::in([MapEditorGrid::CELL_ROWS])],
-            'data.cellCols' => ['required', 'integer', Rule::in([MapEditorGrid::CELL_COLS])],
+            'data.cellRows' => ['required', 'integer', 'min:'.MapEditorGrid::MIN_CELL_ROWS, 'max:'.MapEditorGrid::MAX_CELL_ROWS],
+            'data.cellCols' => ['required', 'integer', 'min:'.MapEditorGrid::MIN_CELL_COLS, 'max:'.MapEditorGrid::MAX_CELL_COLS],
             'data.cells' => ['required', 'array'],
             'data.bridges' => ['required', 'array'],
         ];
@@ -73,11 +73,29 @@ class SaveMapRequest extends FormRequest
                 return;
             }
 
-            $expectedRows = MapEditorGrid::CELL_ROWS;
-            $expectedCols = MapEditorGrid::CELL_COLS;
+            $declaredRows = $data['cellRows'] ?? null;
+            $declaredCols = $data['cellCols'] ?? null;
+            if (! is_numeric($declaredRows)) {
+                $validator->errors()->add('data.cellRows', 'cellRows must be a number.');
+
+                return;
+            }
+            if (! is_numeric($declaredCols)) {
+                $validator->errors()->add('data.cellCols', 'cellCols must be a number.');
+
+                return;
+            }
+            $expectedRows = (int) $declaredRows;
+            $expectedCols = (int) $declaredCols;
+
+            if (! MapEditorGrid::dimensionsAreAllowed($expectedRows, $expectedCols)) {
+                $validator->errors()->add('data.cellRows', 'Map dimensions are out of allowed range.');
+
+                return;
+            }
 
             if (count($cells) !== $expectedRows) {
-                $validator->errors()->add('data.cells', "Terrain grid must have {$expectedRows} rows.");
+                $validator->errors()->add('data.cells', "Terrain grid must have {$expectedRows} rows (cellRows).");
 
                 return;
             }

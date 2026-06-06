@@ -109,6 +109,40 @@ class MapTest extends TestCase
             ->assertUnprocessable();
     }
 
+    public function test_store_accepts_custom_grid_dimensions(): void
+    {
+        $user = User::factory()->create();
+        $data = MapEditorGrid::emptyData(24, 18);
+
+        $this->actingAs($user)
+            ->postJson(route('maps.store'), [
+                'name' => 'Small map',
+                'data' => $data,
+            ])
+            ->assertCreated();
+
+        $map = Map::query()->where('user_id', $user->id)->firstOrFail();
+        $this->assertSame(24, $map->data['cellRows']);
+        $this->assertSame(18, $map->data['cellCols']);
+        $this->assertCount(24, $map->data['cells']);
+        $this->assertCount(18, $map->data['cells'][0]);
+    }
+
+    public function test_store_rejects_cell_rows_above_max(): void
+    {
+        $user = User::factory()->create();
+        $data = MapEditorGrid::emptyData();
+        $data['cellRows'] = MapEditorGrid::MAX_CELL_ROWS + 1;
+        $data['cellCols'] = 10;
+
+        $this->actingAs($user)
+            ->postJson(route('maps.store'), [
+                'name' => 'Too big',
+                'data' => $data,
+            ])
+            ->assertUnprocessable();
+    }
+
     public function test_store_rejects_wrong_grid_dimensions(): void
     {
         $user = User::factory()->create();

@@ -1,6 +1,12 @@
 import { router } from '@inertiajs/vue3';
 import { computed, ref, shallowRef } from 'vue';
-import { MAP_CELL_COLS, MAP_CELL_ROWS } from '@/lib/mapEditorGrid';
+import { generateRandomMap, type GeneratedMapData } from '@/lib/generateRandomMap';
+import {
+    MAP_EDITOR_CELL_PX,
+    emptyMapPayload,
+    isAllowedMapGridSize,
+    validateMapGridData,
+} from '@/lib/mapEditorGrid';
 import { WATER_TERRAINS, type TerrainId } from '@/lib/terrainCatalog';
 import { destroy as destroyMap, show, store, update } from '@/routes/maps';
 
@@ -29,9 +35,15 @@ function isWaterCell(terrain: string): boolean {
 const MAX_UNDO = 50;
 
 /** Symmetric screen padding (px) when fitting the map so edges stay visibly inside the view. */
-const FIT_SCREEN_PADDING_PX = 40;
+const FIT_SCREEN_PADDING_PX = 56;
 
-export const MAP_EDITOR_MIN_ZOOM = 0.12;
+/**
+ * After computing the zoom that would exactly fit the map, multiply by this (values below 1)
+ * so the default view is a bit more zoomed out with breathing room around the grid.
+ */
+const FIT_TO_VIEW_ZOOM_MULTIPLIER = 0.82;
+
+export const MAP_EDITOR_MIN_ZOOM = 0.04;
 
 export const MAP_EDITOR_MAX_ZOOM = 3;
 
@@ -80,24 +92,29 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
     const camY = ref(0);
     /** Bumped when the map document changes so the canvas can re-fit the view. */
     const mapViewNonce = ref(0);
+    /** Bumped when terrain or bridges change so the editor can repaint without deep-watching cells. */
+    const terrainEpoch = ref(0);
 
     const undoStack = ref<{ cells: string[][]; bridges: boolean[][] }[]>([]);
     const redoStack = ref<{ cells: string[][]; bridges: boolean[][] }[]>([]);
 
     const strokeOpen = ref(false);
 
-    const cellSize = 20;
-    const worldWidth = MAP_CELL_ROWS * cellSize;
-    const worldHeight = MAP_CELL_COLS * cellSize;
+    const cellSize = MAP_EDITOR_CELL_PX;
+    const gridRows = computed(() => cells.value.length);
+    const gridCols = computed(() => cells.value[0]?.length ?? 0);
+    const worldWidth = computed(() => gridRows.value * cellSize);
+    const worldHeight = computed(() => gridCols.value * cellSize);
 
     function fitMapToView(viewportWidthPx: number, viewportHeightPx: number): void {
-        const w = worldWidth;
-        const h = worldHeight;
+        const w = gridRows.value * cellSize;
+        const h = gridCols.value * cellSize;
         const availW = Math.max(64, viewportWidthPx - 2 * FIT_SCREEN_PADDING_PX);
         const availH = Math.max(64, viewportHeightPx - 2 * FIT_SCREEN_PADDING_PX);
         const zw = availW / w;
         const zh = availH / h;
-        const z = Math.min(MAP_EDITOR_MAX_ZOOM, Math.max(MAP_EDITOR_MIN_ZOOM, Math.min(zw, zh)));
+        const fitZ = Math.min(zw, zh) * FIT_TO_VIEW_ZOOM_MULTIPLIER;
+        const z = Math.min(MAP_EDITOR_MAX_ZOOM, Math.max(MAP_EDITOR_MIN_ZOOM, fitZ));
         zoom.value = z;
         camX.value = (viewportWidthPx / z - w) / 2;
         camY.value = (viewportHeightPx / z - h) / 2;
@@ -105,6 +122,10 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
 
     function requestMapViewFit(): void {
         mapViewNonce.value += 1;
+    }
+
+    function bumpTerrainRender(): void {
+        terrainEpoch.value += 1;
     }
 
     function snapshot(): void {
@@ -130,6 +151,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         cells.value = prev.cells;
         bridges.value = prev.bridges;
         dirty.value = true;
+        bumpTerrainRender();
     }
 
     function redo(): void {
@@ -144,6 +166,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         cells.value = next.cells;
         bridges.value = next.bridges;
         dirty.value = true;
+        bumpTerrainRender();
     }
 
     function stampDisc(gx: number, gy: number, paint: (x: number, y: number) => void): void {
@@ -155,7 +178,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
                 }
                 const x = gx + dx;
                 const y = gy + dy;
-                if (x >= 0 && x < MAP_CELL_ROWS && y >= 0 && y < MAP_CELL_COLS) {
+                if (x >= 0 && x < gridRows.value && y >= 0 && y < gridCols.value) {
                     paint(x, y);
                 }
             }
@@ -185,6 +208,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         snapshot();
         bridges.value[gx][gy] = !bridges.value[gx][gy];
         dirty.value = true;
+        bumpTerrainRender();
     }
 
     function beginStroke(): void {
@@ -210,9 +234,11 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         if (activeTool.value === 'brush') {
             stampBrushOnly(gx, gy);
             dirty.value = true;
+            bumpTerrainRender();
         } else if (activeTool.value === 'eraser') {
             stampEraserOnly(gx, gy);
             dirty.value = true;
+            bumpTerrainRender();
         }
     }
 
@@ -231,7 +257,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
             if (visited.has(key)) {
                 continue;
             }
-            if (x < 0 || x >= MAP_CELL_ROWS || y < 0 || y >= MAP_CELL_COLS) {
+            if (x < 0 || x >= gridRows.value || y < 0 || y >= gridCols.value) {
                 continue;
             }
             if (cells.value[x][y] !== target) {
@@ -245,6 +271,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
             queue.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
         }
         dirty.value = true;
+        bumpTerrainRender();
     }
 
     function clickTool(gx: number, gy: number): void {
@@ -266,10 +293,37 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         dirty.value = false;
         undoStack.value = [];
         redoStack.value = [];
+        bumpTerrainRender();
+        requestMapViewFit();
+    }
+
+    function newMapWithSize(cellRows: number, cellCols: number): void {
+        if (!isAllowedMapGridSize(cellRows, cellCols)) {
+            return;
+        }
+        const payload = emptyMapPayload(cellRows, cellCols);
+        cells.value = cloneCells(payload.cells);
+        bridges.value = cloneBridges(payload.bridges);
+        mapName.value = 'Untitled map';
+        currentUuid.value = null;
+        dirty.value = false;
+        undoStack.value = [];
+        redoStack.value = [];
+        bumpTerrainRender();
         requestMapViewFit();
     }
 
     function loadFromPayload(payload: MapDataPayload, name: string, uuid: string): void {
+        if (
+            !validateMapGridData({
+                cellRows: payload.cellRows,
+                cellCols: payload.cellCols,
+                cells: payload.cells,
+                bridges: payload.bridges,
+            })
+        ) {
+            return;
+        }
         cells.value = cloneCells(payload.cells);
         bridges.value = cloneBridges(payload.bridges);
         mapName.value = name;
@@ -277,6 +331,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         dirty.value = false;
         undoStack.value = [];
         redoStack.value = [];
+        bumpTerrainRender();
         requestMapViewFit();
     }
 
@@ -292,10 +347,13 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
     }
 
     function getDataPayload(): MapDataPayload {
+        const rows = gridRows.value;
+        const cols = gridCols.value;
+
         return {
             version: 1,
-            cellRows: MAP_CELL_ROWS,
-            cellCols: MAP_CELL_COLS,
+            cellRows: rows,
+            cellCols: cols,
             cells: cloneCells(cells.value),
             bridges: cloneBridges(bridges.value),
         };
@@ -352,6 +410,29 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         router.reload({ only: ['maps'] });
     }
 
+    function applyGeneratedMap(payload: MapDataPayload | GeneratedMapData): void {
+        if (
+            !validateMapGridData({
+                cellRows: payload.cellRows,
+                cellCols: payload.cellCols,
+                cells: payload.cells,
+                bridges: payload.bridges,
+            })
+        ) {
+            return;
+        }
+        snapshot();
+        cells.value = cloneCells(payload.cells);
+        bridges.value = cloneBridges(payload.bridges);
+        dirty.value = true;
+        bumpTerrainRender();
+        requestMapViewFit();
+    }
+
+    function generateAndApplyMap(seed?: number): void {
+        applyGeneratedMap(generateRandomMap(seed, gridRows.value, gridCols.value));
+    }
+
     function bumpBrush(delta: number): void {
         const sizes = [1, 3, 5];
         const i = sizes.indexOf(brushRadius.value);
@@ -376,7 +457,10 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         camX,
         camY,
         mapViewNonce,
+        terrainEpoch,
         cellSize,
+        gridRows,
+        gridCols,
         worldWidth,
         worldHeight,
         fitMapToView,
@@ -390,12 +474,15 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         strokePaint,
         clickTool,
         newMap,
+        newMapWithSize,
         loadMap,
         saveMap,
         deleteMap,
         loadFromPayload,
         getDataPayload,
         bumpBrush,
+        applyGeneratedMap,
+        generateAndApplyMap,
     };
 }
 

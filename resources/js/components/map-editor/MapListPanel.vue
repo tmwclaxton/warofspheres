@@ -17,6 +17,10 @@ const props = defineProps<{
     maps: MapSummary[];
 }>();
 
+const emit = defineEmits<{
+    requestNewMap: [];
+}>();
+
 const loadingUuid = ref<string | null>(null);
 const error = ref<string | null>(null);
 
@@ -41,15 +45,8 @@ async function openMap(uuid: string): Promise<void> {
     }
 }
 
-function newMap(): void {
-    if (
-        props.editor.dirty.value
-        && !window.confirm('Discard unsaved changes and start a new map?')
-    ) {
-        return;
-    }
-    error.value = null;
-    props.editor.newMap();
+function requestNewMap(): void {
+    emit('requestNewMap');
 }
 
 async function removeMap(uuid: string, name: string): Promise<void> {
@@ -87,7 +84,7 @@ function formatUpdated(iso: string | null): string {
             <p class="font-display text-xs font-bold uppercase tracking-wide text-muted-foreground">
                 Maps
             </p>
-            <Button size="sm" variant="outline" class="h-7 gap-1 px-2 text-xs" @click="newMap">
+            <Button size="sm" variant="outline" class="h-7 gap-1 px-2 text-xs" @click="requestNewMap">
                 <FilePlus2 class="size-3.5" />
                 New
             </Button>
