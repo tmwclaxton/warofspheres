@@ -27,6 +27,12 @@
     --color-wod-gray-dk: #5a5a5a;
     --color-wod-cream: #f7f1e3;
     --color-wod-paper: #e8dfc8;
+    --color-wod-faction-red: #ff0000;
+    --color-wod-faction-blue: #0000ff;
+    --color-wod-faction-orange: #ff9600;
+    --color-wod-faction-purple: #af00af;
+    --color-wod-faction-green: #00af00;
+    --color-wod-faction-cyan: #00ffff;
 
     --radius-lg: var(--radius);
     --radius-md: calc(var(--radius) - 2px);
@@ -280,12 +286,12 @@
         @apply flex items-center justify-center rounded-lg border-2 border-foreground bg-wod-green-dk text-wod-green-lt shadow-[2px_2px_0_#1a1a1a];
     }
 
-    .wod-terrain-strip {
-        @apply flex items-center gap-1;
+    .wod-faction-strip {
+        @apply grid grid-cols-3 gap-0.5;
     }
 
-    .wod-terrain-strip .wod-swatch {
-        @apply size-2.5 rounded-sm;
+    .wod-faction-strip .wod-swatch {
+        @apply size-2.5 rounded-full;
     }
 
     .wod-nav-active {

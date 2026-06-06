@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Link, usePage } from '@inertiajs/vue3';
 import { computed } from 'vue';
+import FactionSwatches from '@/components/FactionSwatches.vue';
 import { edit as editProfile } from '@/routes/profile';
 
 const page = usePage();
@@ -14,12 +15,7 @@ const user = computed(() => page.props.auth.user);
             class="relative mx-auto flex max-w-6xl flex-wrap items-center justify-center gap-x-4 gap-y-2 text-center sm:justify-between sm:text-left"
         >
             <div class="flex flex-wrap items-center justify-center gap-2 sm:justify-start">
-                <div class="wod-terrain-strip" aria-hidden="true">
-                    <span class="wod-swatch bg-wod-green-dk" />
-                    <span class="wod-swatch bg-wod-green-lt" />
-                    <span class="wod-swatch bg-wod-blue" />
-                    <span class="wod-swatch bg-wod-red" />
-                </div>
+                <FactionSwatches />
                 <p>
                     <span class="font-display font-bold text-foreground"
                         >War of Spheres</span

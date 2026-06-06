@@ -15,6 +15,7 @@ import {
     DropdownMenuContent,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import FactionSwatches from '@/components/FactionSwatches.vue';
 import UserMenuContent from '@/components/UserMenuContent.vue';
 import { useCurrentUrl } from '@/composables/useCurrentUrl';
 import { getInitials } from '@/composables/useInitials';
@@ -53,16 +54,7 @@ const navItems = computed<NavItem[]>(() => [
                     </div>
                 </Link>
 
-                <div
-                    class="wod-terrain-strip hidden sm:flex"
-                    aria-hidden="true"
-                    title="Terrain palette"
-                >
-                    <span class="wod-swatch bg-wod-red" />
-                    <span class="wod-swatch bg-wod-blue" />
-                    <span class="wod-swatch bg-wod-green-dk" />
-                    <span class="wod-swatch bg-wod-gray-dk" />
-                </div>
+                <FactionSwatches class="hidden sm:grid" />
 
                 <nav class="hidden items-center gap-1 md:flex">
                     <Button
