@@ -3,10 +3,10 @@
 namespace App\Http\Controllers\Games;
 
 use App\Enums\GameStatus;
+use App\Games\Services\GameManager;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Games\CreateGameRequest;
 use App\Http\Requests\Games\SubmitOrdersRequest;
-use App\Games\Services\GameManager;
 use App\Models\Game;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -15,19 +15,50 @@ use Inertia\Response;
 
 class GameController extends Controller
 {
-    public function index(Request $request): Response
+    public function lobbies(Request $request): Response
     {
         $lobbies = Game::query()
             ->where('status', GameStatus::Lobby)
             ->with(['players.user', 'host'])
-            ->withCount('players')
             ->latest()
             ->limit(20)
             ->get()
-            ->map(fn (Game $game) => $this->serializeLobby($game, $request->user()?->id));
+            ->map(fn (Game $game) => $this->serializeLobby($game, $request->user()->id));
 
         return Inertia::render('games/Lobby', [
             'lobbies' => $lobbies,
+        ]);
+    }
+
+    public function ongoing(Request $request): Response
+    {
+        $matches = Game::query()
+            ->where('status', GameStatus::Playing)
+            ->whereHas('players', fn ($query) => $query->where('user_id', $request->user()->id))
+            ->with(['players.user', 'host'])
+            ->latest('started_at')
+            ->limit(20)
+            ->get()
+            ->map(fn (Game $game) => $this->serializeMatch($game, $request->user()->id));
+
+        return Inertia::render('matches/Ongoing', [
+            'matches' => $matches,
+        ]);
+    }
+
+    public function past(Request $request): Response
+    {
+        $matches = Game::query()
+            ->where('status', GameStatus::Finished)
+            ->whereHas('players', fn ($query) => $query->where('user_id', $request->user()->id))
+            ->with(['players.user', 'host', 'winner'])
+            ->latest('finished_at')
+            ->limit(20)
+            ->get()
+            ->map(fn (Game $game) => $this->serializeMatch($game, $request->user()->id));
+
+        return Inertia::render('matches/Past', [
+            'matches' => $matches,
         ]);
     }
 
@@ -118,6 +149,20 @@ class GameController extends Controller
         $gameManager->togglePause($game, $request->user(), $request->boolean('paused'));
 
         return back();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function serializeMatch(Game $game, int $userId): array
+    {
+        return [
+            ...$this->serializeLobby($game, $userId),
+            'startedAt' => $game->started_at?->toIso8601String(),
+            'finishedAt' => $game->finished_at?->toIso8601String(),
+            'winnerName' => $game->winner?->name,
+            'isWinner' => $game->winner_user_id === $userId,
+        ];
     }
 
     /**

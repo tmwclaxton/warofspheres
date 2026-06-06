@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { Head, Link, usePage } from '@inertiajs/vue3';
-import { computed } from 'vue';
 import {
     Castle,
     Eye,
@@ -9,8 +8,8 @@ import {
     Users,
 } from 'lucide-vue-next';
 import { Button } from '@/components/ui/button';
-import { dashboard, login } from '@/routes';
-import { index as gamesIndex } from '@/routes/games';
+import { login } from '@/routes';
+import { index as lobbiesIndex } from '@/routes/lobbies';
 
 withDefaults(
     defineProps<{
@@ -22,9 +21,6 @@ withDefaults(
 );
 
 const page = usePage();
-const dashboardUrl = computed(() =>
-    page.props.currentTeam ? dashboard(page.props.currentTeam.slug).url : '/',
-);
 
 const features = [
     {
@@ -103,7 +99,7 @@ const steps = [
                     </div>
                 </div>
                 <nav class="flex gap-3">
-                    <Link v-if="page.props.auth.user" :href="gamesIndex().url">
+                    <Link v-if="page.props.auth.user" :href="lobbiesIndex().url">
                         <Button>Play Now</Button>
                     </Link>
                     <Link v-else :href="login()">
@@ -134,7 +130,7 @@ const steps = [
                         clash across procedurally generated battlefields.
                     </p>
                     <div class="mt-8 flex flex-wrap gap-3">
-                        <Link v-if="page.props.auth.user" :href="gamesIndex().url">
+                        <Link v-if="page.props.auth.user" :href="lobbiesIndex().url">
                             <Button size="lg" class="h-12 px-8 text-base">
                                 Enter the battlefield
                             </Button>
@@ -142,18 +138,6 @@ const steps = [
                         <Link v-else :href="login()">
                             <Button size="lg" class="h-12 px-8 text-base">
                                 Log in with WorkOS
-                            </Button>
-                        </Link>
-                        <Link
-                            v-if="page.props.auth.user"
-                            :href="dashboardUrl"
-                        >
-                            <Button
-                                size="lg"
-                                variant="outline"
-                                class="h-12 border-[#1a1814]/20 bg-[#f7f1e3]/60 px-8 text-base"
-                            >
-                                Dashboard
                             </Button>
                         </Link>
                     </div>
@@ -223,7 +207,7 @@ const steps = [
                 </div>
                 <Link
                     v-if="page.props.auth.user"
-                    :href="gamesIndex().url"
+                    :href="lobbiesIndex().url"
                 >
                     <Button size="lg" class="h-12 px-8 text-base">
                         Browse lobbies

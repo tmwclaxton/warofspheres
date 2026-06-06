@@ -13,7 +13,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
-import { index, joinCode, show, store } from '@/routes/games';
+import { joinCode, show, store } from '@/routes/games';
 
 type Lobby = {
     uuid: string;
@@ -50,16 +50,18 @@ function joinLobby() {
 </script>
 
 <template>
-    <Head title="Play" />
+    <Head title="Lobbies" />
 
     <div class="flex flex-col gap-8">
         <Heading
-            title="War of Spheres"
+            title="Lobby Overview"
             description="Create or join a quick match. Up to six commanders per battle."
         />
 
         <div class="grid gap-6 lg:grid-cols-2">
-            <div class="space-y-4 rounded-xl border p-6">
+            <div
+                class="space-y-4 rounded-xl border border-[#1a1814]/15 bg-[#f7f1e3]/80 p-6"
+            >
                 <h2 class="text-lg font-semibold">Create lobby</h2>
                 <div class="space-y-2">
                     <Label for="max_players">Players</Label>
@@ -84,7 +86,9 @@ function joinLobby() {
                 </Button>
             </div>
 
-            <div class="space-y-4 rounded-xl border p-6">
+            <div
+                class="space-y-4 rounded-xl border border-[#1a1814]/15 bg-[#f7f1e3]/80 p-6"
+            >
                 <h2 class="text-lg font-semibold">Join by code</h2>
                 <div class="space-y-2">
                     <Label for="code">Lobby code</Label>
@@ -110,14 +114,14 @@ function joinLobby() {
             <h2 class="text-lg font-semibold">Open lobbies</h2>
             <div
                 v-if="lobbies.length === 0"
-                class="rounded-xl border border-dashed p-8 text-center text-muted-foreground"
+                class="rounded-xl border border-dashed border-[#1a1814]/20 bg-[#f7f1e3]/40 p-8 text-center text-[#5c5346]"
             >
                 No open lobbies. Create one to get started.
             </div>
             <div
                 v-for="lobby in lobbies"
                 :key="lobby.uuid"
-                class="flex items-center justify-between rounded-xl border p-4"
+                class="flex items-center justify-between rounded-xl border border-[#1a1814]/15 bg-[#f7f1e3]/80 p-4"
             >
                 <div>
                     <div class="flex items-center gap-2">

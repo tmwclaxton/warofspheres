@@ -3,7 +3,7 @@ import { Head, Link, usePage } from '@inertiajs/vue3';
 import { onMounted, onUnmounted } from 'vue';
 import GameCanvas from '@/components/game/GameCanvas.vue';
 import { Button } from '@/components/ui/button';
-import { index } from '@/routes/games';
+import { index as lobbies } from '@/routes/lobbies';
 import { useGameStore } from '@/stores/gameStore';
 
 type GamePayload = {
@@ -79,7 +79,7 @@ onUnmounted(() => {
                 >
                     Pause (P)
                 </Button>
-                <Link :href="index().url">
+                <Link :href="lobbies().url">
                     <Button size="sm" variant="ghost">Exit</Button>
                 </Link>
             </div>
@@ -99,7 +99,7 @@ onUnmounted(() => {
                                 : 'Defeat'
                         }}
                     </p>
-                    <Link :href="index().url" class="mt-4 inline-block">
+                    <Link :href="lobbies().url" class="mt-4 inline-block">
                         <Button>Return to lobbies</Button>
                     </Link>
                 </div>

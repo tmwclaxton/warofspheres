@@ -77,6 +77,6 @@ class TeamInvitationController extends Controller
             $user->switchTeam($team);
         });
 
-        return to_route('dashboard');
+        return to_route('lobbies.index');
     }
 }

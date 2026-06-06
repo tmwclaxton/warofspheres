@@ -23,7 +23,7 @@ Route::middleware(['guest'])->group(function () {
             URL::defaults(['current_team' => $currentTeam->slug]);
         }
 
-        return redirect()->intended(route('dashboard'));
+        return redirect()->intended(route('lobbies.index'));
     });
 });
 

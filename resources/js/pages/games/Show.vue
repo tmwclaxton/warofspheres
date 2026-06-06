@@ -2,7 +2,8 @@
 import { Head, Link, router } from '@inertiajs/vue3';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { index, join, play, start } from '@/routes/games';
+import { join, play, start } from '@/routes/games';
+import { index as lobbies } from '@/routes/lobbies';
 
 type Lobby = {
     uuid: string;
@@ -68,7 +69,7 @@ function startGame() {
         </div>
 
         <div class="flex flex-wrap gap-3">
-            <Link :href="index().url">
+            <Link :href="lobbies().url">
                 <Button variant="outline">Back</Button>
             </Link>
             <Button

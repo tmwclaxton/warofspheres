@@ -7,6 +7,7 @@ use App\Models\Game;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Redis;
+use Predis\Client;
 use Tests\TestCase;
 
 class GameLobbyTest extends TestCase
@@ -17,7 +18,7 @@ class GameLobbyTest extends TestCase
     {
         parent::setUp();
 
-        if (! extension_loaded('redis') && ! class_exists(\Predis\Client::class)) {
+        if (! extension_loaded('redis') && ! class_exists(Client::class)) {
             $this->markTestSkipped('Redis is required for game tests.');
         }
     }
@@ -27,7 +28,7 @@ class GameLobbyTest extends TestCase
         $user = User::factory()->create();
 
         $this->actingAs($user)
-            ->get(route('games.index'))
+            ->get(route('lobbies.index'))
             ->assertOk();
     }
 
