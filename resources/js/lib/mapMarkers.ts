@@ -1,12 +1,17 @@
-import { isTerrainId, type TerrainId } from '@/lib/terrainCatalog';
+import { isTerrainId } from '@/lib/terrainCatalog';
+import type { TerrainId } from '@/lib/terrainCatalog';
 
 export const MAP_MARKER_CAPITAL = 'capital' as const;
 
 export const MAP_MARKER_FLAG = 'flag' as const;
 
-export type MapMarkerType = typeof MAP_MARKER_CAPITAL | typeof MAP_MARKER_FLAG;
+export type MapMarkerType =
+    | typeof MAP_MARKER_CAPITAL
+    | typeof MAP_MARKER_FLAG
+    | 'infantry'
+    | 'tank';
 
-/** Visual scale for editor canvas markers (capital / flag) vs base layout fractions. */
+/** Visual scale for editor canvas markers vs base layout fractions. */
 export const MAP_MARKER_EDITOR_DRAW_SCALE = 3;
 
 /** Inner radius of a 5-point star as a fraction of outer radius (classic “w” shape). */
@@ -200,5 +205,83 @@ export function drawFlagMarker(
     pathHexagonPointy(ctx, cx, cy, r);
     ctx.strokeStyle = 'rgba(12, 12, 16, 0.94)';
     ctx.lineWidth = Math.max(1, cellPx * 0.03 * s);
+    ctx.stroke();
+}
+
+export function drawInfantryMarker(
+    ctx: CanvasRenderingContext2D,
+    gx: number,
+    gy: number,
+    colorHex: string,
+    cellPx: number,
+): void {
+    const s = MAP_MARKER_EDITOR_DRAW_SCALE;
+    const cx = gx * cellPx + cellPx / 2;
+    const cy = gy * cellPx + cellPx / 2;
+    const r = cellPx * 0.22 * s;
+
+    strokeMarkerHalo(ctx, () => {
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    }, cellPx, s);
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = colorHex;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.88)';
+    ctx.lineWidth = Math.max(1.5, cellPx * 0.045 * s);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(12, 12, 16, 0.94)';
+    ctx.lineWidth = Math.max(1, cellPx * 0.028 * s);
+    ctx.stroke();
+}
+
+export function drawTankMarker(
+    ctx: CanvasRenderingContext2D,
+    gx: number,
+    gy: number,
+    colorHex: string,
+    cellPx: number,
+): void {
+    const s = MAP_MARKER_EDITOR_DRAW_SCALE;
+    const cx = gx * cellPx + cellPx / 2;
+    const cy = gy * cellPx + cellPx / 2;
+    const r = cellPx * 0.24 * s;
+
+    strokeMarkerHalo(ctx, () => {
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    }, cellPx, s);
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = colorHex;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.88)';
+    ctx.lineWidth = Math.max(1.5, cellPx * 0.045 * s);
+    ctx.stroke();
+
+    const rw = r * 0.85;
+    const rh = r * 0.38;
+    ctx.fillStyle = 'rgba(255, 252, 235, 0.92)';
+    ctx.fillRect(cx - rw / 2, cy - rh / 2, rw, rh);
+    ctx.strokeStyle = 'rgba(12, 12, 16, 0.94)';
+    ctx.lineWidth = Math.max(1, cellPx * 0.022 * s);
+    ctx.strokeRect(cx - rw / 2, cy - rh / 2, rw, rh);
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(12, 12, 16, 0.94)';
+    ctx.lineWidth = Math.max(1, cellPx * 0.028 * s);
     ctx.stroke();
 }

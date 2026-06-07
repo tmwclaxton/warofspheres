@@ -1,12 +1,17 @@
 import { MAP_MAX_TEAMS, MAP_MIN_TEAMS } from '@/lib/mapEditorGrid';
 import type { MapMarker } from '@/lib/mapEditorGrid';
+import { isFarEnoughFromHydraulicWaterForMapMarker, isPlaceableTerrain } from '@/lib/mapMarkers';
 import {
+    clampMinBetweenFlagsForSmallLand,
     computeMinManhattanMarkerSeparation,
+    computeMinSeparationForMapState,
+    countPlaceableLandCells,
     inferCapitalSpacing,
+    MAP_MARKER_MIN_MANHATTAN_SEP,
     minPlaceableHaloAmongCapitals,
     preliminaryMaxRForMarkerSpacing,
+    troopManhattanClearanceToMarker,
 } from '@/lib/mapMarkerSpacing';
-import { isFarEnoughFromHydraulicWaterForMapMarker, isPlaceableTerrain } from '@/lib/mapMarkers';
 
 type Cell = { row: number; col: number };
 
@@ -268,7 +273,7 @@ function placeFlagsNearCapitals(
         minHalo = Math.max(12, Math.floor(nLand / Math.max(8, teamCount * 4)));
     }
 
-    const minBetweenFlags = computeMinManhattanMarkerSeparation({
+    let minBetweenFlags = computeMinManhattanMarkerSeparation({
         rows,
         cols,
         nLand,
@@ -277,6 +282,7 @@ function placeFlagsNearCapitals(
         capitalSpacing,
         minHaloLandCells: minHalo,
     });
+    minBetweenFlags = clampMinBetweenFlagsForSmallLand(minBetweenFlags, nLand, minDim);
 
     const maxR = Math.min(
         rows + cols - 2,
@@ -359,19 +365,181 @@ function placeFlagsNearCapitals(
 }
 
 /**
+ * True when every team has at least one passable Voronoi cell (excluding capitals) that can host
+ * a troop under the same Manhattan rules as {@see buildTroopMarkersForGeneratedMap} (using the
+ * map's computed separation capped by capital spread).
+ */
+function eachTeamHasTroopFeasibleLand(
+    cells: string[][],
+    rows: number,
+    cols: number,
+    capitals: Cell[],
+    teamCount: number,
+): boolean {
+    if (capitals.length !== teamCount || teamCount < 1) {
+        return false;
+    }
+
+    const capitalPositions = capitals.map((c) => ({ row: c.row, col: c.col }));
+    const nLand = countPlaceableLandCells(cells, rows, cols);
+    const flagBudget = Math.max(teamCount * 2, Math.min(320, Math.max(48, Math.floor(nLand / 3))));
+    const sep = Math.min(
+        computeMinSeparationForMapState({
+            cells,
+            rows,
+            cols,
+            teamCount,
+            capitalPositions,
+            flagBudget,
+        }),
+        Math.max(MAP_MARKER_MIN_MANHATTAN_SEP, inferCapitalSpacing(capitals)),
+    );
+
+    const owner: number[][] = Array.from({ length: rows }, () => Array(cols).fill(-1));
+
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const terr = cells[r]?.[c];
+
+            if (
+                typeof terr !== 'string'
+                || !isPlaceableTerrain(terr)
+                || !isFarEnoughFromHydraulicWaterForMapMarker(cells, rows, cols, r, c)
+            ) {
+                continue;
+            }
+
+            let bestD = Infinity;
+            let bestTeam = 0;
+
+            for (let t = 0; t < capitals.length; t++) {
+                const cap = capitals[t]!;
+                const d = Math.abs(r - cap.row) + Math.abs(c - cap.col);
+
+                if (d < bestD || (d === bestD && t < bestTeam)) {
+                    bestD = d;
+                    bestTeam = t;
+                }
+            }
+
+            owner[r]![c] = bestTeam;
+        }
+    }
+
+    const occupied = new Set(capitals.map((p) => `${p.row},${p.col}`));
+    const found = new Array(teamCount).fill(false);
+
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const t = owner[r]?.[c] ?? -1;
+
+            if (t < 0 || t >= teamCount) {
+                continue;
+            }
+
+            if (occupied.has(`${r},${c}`)) {
+                continue;
+            }
+
+            const terr = cells[r]?.[c];
+
+            if (
+                typeof terr !== 'string'
+                || !isPlaceableTerrain(terr)
+                || !isFarEnoughFromHydraulicWaterForMapMarker(cells, rows, cols, r, c)
+            ) {
+                continue;
+            }
+
+            let ok = true;
+
+            for (let ot = 0; ot < capitals.length; ot++) {
+                const capCell = capitals[ot]!;
+                const need = troopManhattanClearanceToMarker(sep, ot, t, 'capital');
+
+                if (Math.abs(r - capCell.row) + Math.abs(c - capCell.col) < need) {
+                    ok = false;
+
+                    break;
+                }
+            }
+
+            if (ok) {
+                found[t] = true;
+            }
+        }
+    }
+
+    return found.every(Boolean);
+}
+
+/**
+ * When farthest-point sampling lands capitals very close (common on tiny islands), legal troop
+ * spacing around flags/capitals may have no solution. Re-sample and fall back to a greedy spread
+ * so procedural maps keep usable separation.
+ */
+function widenCapitalsForTroopLegroom(
+    cells: string[][],
+    rows: number,
+    cols: number,
+    capitals: Cell[],
+    placeable: readonly Cell[],
+    teamCount: number,
+    minDim: number,
+    rng: () => number,
+): Cell[] {
+    if (teamCount < 2 || capitals.length < 2) {
+        return capitals;
+    }
+
+    if (eachTeamHasTroopFeasibleLand(cells, rows, cols, capitals, teamCount)) {
+        return capitals;
+    }
+
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+        const next = pickFarthestCapitals(placeable, teamCount, rng);
+
+        if (eachTeamHasTroopFeasibleLand(cells, rows, cols, next, teamCount)) {
+            return next;
+        }
+    }
+
+    for (let d = Math.min(22, Math.max(MAP_MARKER_MIN_MANHATTAN_SEP, Math.floor(minDim * 0.55))); d >= MAP_MARKER_MIN_MANHATTAN_SEP; d -= 1) {
+        for (let rep = 0; rep < 20; rep += 1) {
+            const order = placeable.slice();
+
+            shuffleInPlace(order, rng);
+            const spread = greedyFromOrder(order, d, teamCount);
+
+            if (
+                spread.length >= teamCount
+                && eachTeamHasTroopFeasibleLand(cells, rows, cols, spread.slice(0, teamCount), teamCount)
+            ) {
+                return spread.slice(0, teamCount);
+            }
+        }
+    }
+
+    return capitals;
+}
+
+/**
  * Pick capital sites and flags from generated terrain. Uses the same placement rules as the
  * editor (land only: not water / deep_water / river; capitals and flags also keep Chebyshev
  * clearance from hydraulic water so large glyphs do not read as overlapping water).
  *
- * Team count: scan Manhattan spacing thresholds on one shuffled land list — prefer more teams
- * when the map has room; tie-break toward wider spacing. Capital *positions* are then chosen by
- * farthest-point sampling so teams spread across placeable land instead of following visit order.
+ * Team count: by default, scan Manhattan spacing thresholds on one shuffled land list — prefer
+ * more teams when the map has room; tie-break toward wider spacing. Capital *positions* are then
+ * chosen by farthest-point sampling so teams spread across placeable land instead of following
+ * visit order. When {@link requestedTeamCount} is a valid integer in range, that count is used
+ * instead (still limited by how many placeable cells exist).
  */
 export function buildMarkersForGeneratedTerrain(
     cells: string[][],
     rows: number,
     cols: number,
     rng: () => number,
+    requestedTeamCount?: number,
 ): { teamCount: number; markers: MapMarker[] } {
     const placeable = collectPlaceableCells(cells, rows, cols);
     const nLand = placeable.length;
@@ -381,37 +549,77 @@ export function buildMarkersForGeneratedTerrain(
         return { teamCount: MAP_MIN_TEAMS, markers: [] };
     }
 
-    const order = placeable.slice();
+    let capitals: Cell[];
+    let teamCount: number;
 
-    shuffleInPlace(order, rng);
+    if (
+        typeof requestedTeamCount === 'number'
+        && Number.isInteger(requestedTeamCount)
+        && requestedTeamCount >= MAP_MIN_TEAMS
+        && requestedTeamCount <= MAP_MAX_TEAMS
+    ) {
+        const k = requestedTeamCount;
+        capitals = pickFarthestCapitals(placeable, k, rng);
 
-    const maxD = Math.max(2, Math.floor(minDim / 9));
-    let best: Cell[] = [];
-    let bestD = 0;
+        if (capitals.length < k) {
+            capitals = padCapitalsToMinTeams(capitals, placeable, k);
+        }
 
-    for (let d = maxD; d >= 1; d--) {
-        const c = greedyFromOrder(order, d, MAP_MAX_TEAMS);
+        teamCount = Math.min(MAP_MAX_TEAMS, Math.max(MAP_MIN_TEAMS, capitals.length));
+        capitals = pickFarthestCapitals(placeable, teamCount, rng);
+        capitals = widenCapitalsForTroopLegroom(
+            cells,
+            rows,
+            cols,
+            capitals,
+            placeable,
+            teamCount,
+            minDim,
+            rng,
+        );
+    } else {
+        const order = placeable.slice();
 
-        if (c.length >= MAP_MIN_TEAMS) {
-            if (c.length > best.length || (c.length === best.length && d > bestD)) {
-                best = c;
-                bestD = d;
+        shuffleInPlace(order, rng);
+
+        const maxD = Math.max(2, Math.floor(minDim / 9));
+        let best: Cell[] = [];
+        let bestD = 0;
+
+        for (let d = maxD; d >= 1; d--) {
+            const c = greedyFromOrder(order, d, MAP_MAX_TEAMS);
+
+            if (c.length >= MAP_MIN_TEAMS) {
+                if (c.length > best.length || (c.length === best.length && d > bestD)) {
+                    best = c;
+                    bestD = d;
+                }
             }
         }
+
+        capitals = best;
+
+        if (capitals.length < MAP_MIN_TEAMS) {
+            capitals = greedyFromOrder(order, 1, MAP_MAX_TEAMS);
+        }
+
+        if (capitals.length < MAP_MIN_TEAMS) {
+            capitals = padCapitalsToMinTeams(capitals, placeable, MAP_MIN_TEAMS);
+        }
+
+        teamCount = Math.min(MAP_MAX_TEAMS, Math.max(MAP_MIN_TEAMS, capitals.length));
+        capitals = pickFarthestCapitals(placeable, teamCount, rng);
+        capitals = widenCapitalsForTroopLegroom(
+            cells,
+            rows,
+            cols,
+            capitals,
+            placeable,
+            teamCount,
+            minDim,
+            rng,
+        );
     }
-
-    let capitals = best;
-
-    if (capitals.length < MAP_MIN_TEAMS) {
-        capitals = greedyFromOrder(order, 1, MAP_MAX_TEAMS);
-    }
-
-    if (capitals.length < MAP_MIN_TEAMS) {
-        capitals = padCapitalsToMinTeams(capitals, placeable, MAP_MIN_TEAMS);
-    }
-
-    const teamCount = Math.min(MAP_MAX_TEAMS, Math.max(MAP_MIN_TEAMS, capitals.length));
-    capitals = pickFarthestCapitals(placeable, teamCount, rng);
 
     const markers: MapMarker[] = capitals.map((cell, team) => ({
         type: 'capital' as const,

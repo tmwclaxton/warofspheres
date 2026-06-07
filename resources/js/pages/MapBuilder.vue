@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Head, router, usePage } from '@inertiajs/vue3';
-import { Flag, Landmark, Redo2, Save, Sparkles, Undo2 } from 'lucide-vue-next';
+import { Circle, Flag, Landmark, RectangleHorizontal, Redo2, Save, Sparkles, Undo2 } from 'lucide-vue-next';
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import AppModal from '@/components/AppModal.vue';
 import MapEditorCanvas from '@/components/map-editor/MapEditorCanvas.vue';
@@ -14,7 +14,7 @@ import MapTerrainPalette from '@/components/map-editor/MapTerrainPalette.vue';
 import type { TerrainTypeRow } from '@/components/map-editor/MapTerrainPalette.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import type { MapDataPayload } from '@/composables/useMapEditor';
+import type { MapDataPayload, MapEditorTool } from '@/composables/useMapEditor';
 import { useMapEditor } from '@/composables/useMapEditor';
 import type { MapGenerationType } from '@/lib/generateRandomMap';
 import {
@@ -229,7 +229,7 @@ const teamMarkerDialogLabel = computed(() => {
 
 const teamMarkerDialogDescription = computed(
     () =>
-        `Capitals and flags are placed with the Capital and Flag tools in the toolbar. You chose ${teamMarkerDialogLabel.value} — pick a tool below, then click land on the map.`,
+        `Capitals, flags, and troop spawns are placed with the marker tools in the toolbar. You chose ${teamMarkerDialogLabel.value} — pick a tool below, then click land on the map.`,
 );
 
 function onTeamNeedMarkerTool(slot: number): void {
@@ -241,7 +241,7 @@ function closeTeamMarkerDialog(): void {
     teamMarkerDialogOpen.value = false;
 }
 
-function applyTeamMarkerTool(tool: 'capital' | 'flag'): void {
+function applyTeamMarkerTool(tool: Extract<MapEditorTool, 'capital' | 'flag' | 'infantry' | 'tank'>): void {
     editor.selectedTeam.value = teamMarkerDialogSlot.value;
     editor.activeTool.value = tool;
     teamMarkerDialogOpen.value = false;
@@ -263,7 +263,7 @@ function onRequestRemoveTeam(slot: number): void {
 
     if (
         !window.confirm(
-            `Remove the ${label} team? Their capital and flags will be removed, and remaining teams will be renumbered. You can Undo.`,
+            `Remove the ${label} team? Their capital, flags, and troop spawns will be removed, and remaining teams will be renumbered. You can Undo.`,
         )
     ) {
         return;
@@ -319,8 +319,12 @@ function openGenerateDialog(): void {
     generateDialogOpen.value = true;
 }
 
-function onGenerateMap(payload: { seed?: number; type: MapGenerationType }): void {
-    editor.generateAndApplyMap(payload.seed, payload.type);
+function onGenerateMap(payload: {
+    seed?: number;
+    type: MapGenerationType;
+    teamCount: number;
+}): void {
+    editor.generateAndApplyMap(payload.seed, payload.type, payload.teamCount);
 }
 
 async function onSave(): Promise<void> {
@@ -503,12 +507,13 @@ onUnmounted(() => {
         </div>
 
         <div
-            class="flex w-full min-w-0 shrink-0 flex-col gap-2 sm:flex-row sm:items-stretch"
+            class="flex w-full min-w-0 shrink-0 flex-row items-stretch gap-2 border-t border-foreground/15 pt-1.5"
         >
-            <MapTerrainPalette :editor="editor" :terrain-types="terrainTypes" />
+            <MapTerrainPalette :editor="editor" :terrain-types="terrainTypes" class="shrink-0" />
             <MapTeamPalette
                 :editor="editor"
                 :team-colors="teamColors"
+                class="min-h-0 min-w-0 flex-1 basis-0"
                 @need-marker-tool="onTeamNeedMarkerTool"
                 @request-remove-team="onRequestRemoveTeam"
             />
@@ -517,6 +522,7 @@ onUnmounted(() => {
         <MapGenerateDialog
             v-model:open="generateDialogOpen"
             :dirty="editorDirty"
+            :team-count="headerTeamCount"
             @generate="onGenerateMap"
         />
 
@@ -536,6 +542,14 @@ onUnmounted(() => {
                 <Button type="button" variant="outline" @click="applyTeamMarkerTool('capital')">
                     <Landmark class="size-4" stroke-width="2" />
                     Capital
+                </Button>
+                <Button type="button" variant="outline" @click="applyTeamMarkerTool('infantry')">
+                    <Circle class="size-4" stroke-width="2" />
+                    Infantry
+                </Button>
+                <Button type="button" variant="outline" @click="applyTeamMarkerTool('tank')">
+                    <RectangleHorizontal class="size-4" stroke-width="2" />
+                    Tank
                 </Button>
             </template>
         </AppModal>

@@ -1,10 +1,14 @@
 <?php
 
+use App\Game\GameSpecs;
 use App\Http\Controllers\Games\GameController;
 use App\Http\Controllers\Maps\MapController;
 use Illuminate\Support\Facades\Route;
+use Inertia\Inertia;
 
 Route::inertia('/', 'Welcome')->name('home');
+
+Route::get('/wiki', fn () => Inertia::render('Wiki', GameSpecs::forWiki()))->name('wiki');
 
 Route::middleware(['auth'])->group(function () {
     Route::get('map-builder/{map?}', [MapController::class, 'builder'])->name('map-builder');

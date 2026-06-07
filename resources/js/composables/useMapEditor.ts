@@ -22,8 +22,24 @@ import {
 import type { TerrainId } from '@/lib/terrainCatalog';
 import { randomWackyMapName } from '@/lib/wackyMapName';
 import mapsRoutes, { destroy as destroyMap, show, store, update } from '@/routes/maps';
+import { useToastStore } from '@/stores/toastStore';
 
-export type MapEditorTool = 'brush' | 'eraser' | 'fill' | 'pan' | 'capital' | 'flag';
+let lastPlacementToastAtMs = 0;
+
+const PLACEMENT_TOAST_DEBOUNCE_MS = 900;
+
+function notifyPlacementBlocked(message: string): void {
+    const now = Date.now();
+
+    if (now - lastPlacementToastAtMs < PLACEMENT_TOAST_DEBOUNCE_MS) {
+        return;
+    }
+
+    lastPlacementToastAtMs = now;
+    useToastStore().warning(message, 5600);
+}
+
+export type MapEditorTool = 'brush' | 'eraser' | 'fill' | 'pan' | 'capital' | 'flag' | 'infantry' | 'tank';
 
 export type { MapDataPayload, MapMarker } from '@/lib/mapEditorGrid';
 
@@ -149,7 +165,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
     }
 
     watch(activeTool, (tool) => {
-        if (tool === 'capital' || tool === 'flag') {
+        if (tool === 'capital' || tool === 'flag' || tool === 'infantry' || tool === 'tank') {
             if (selectedTeam.value === null) {
                 selectedTeam.value = 0;
             }
@@ -226,7 +242,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
                 return false;
             }
 
-            if (m.type === 'capital' || m.type === 'flag') {
+            if (m.type === 'capital' || m.type === 'flag' || m.type === 'infantry' || m.type === 'tank') {
                 return isFarEnoughFromHydraulicWaterForMapMarker(
                     cells.value,
                     gridRows.value,
@@ -329,6 +345,8 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
             || activeTool.value === 'pan'
             || activeTool.value === 'capital'
             || activeTool.value === 'flag'
+            || activeTool.value === 'infantry'
+            || activeTool.value === 'tank'
         ) {
             return;
         }
@@ -426,7 +444,11 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
 
         const existingOnCell = markers.value.find((m) => m.row === gx && m.col === gy);
 
-        if (existingOnCell?.type === 'flag') {
+        if (
+            existingOnCell?.type === 'flag'
+            || existingOnCell?.type === 'infantry'
+            || existingOnCell?.type === 'tank'
+        ) {
             snapshot();
             markers.value = markers.value.filter((m) => !(m.row === gx && m.col === gy));
             dirty.value = true;
@@ -449,6 +471,10 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         const t = cells.value[gx]?.[gy];
 
         if (typeof t !== 'string' || !isPlaceableTerrain(t)) {
+            notifyPlacementBlocked(
+                'This terrain cannot hold a flag (hills, mountains, rivers, and water are blocked).',
+            );
+
             return;
         }
 
@@ -461,6 +487,8 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
                 gy,
             )
         ) {
+            notifyPlacementBlocked('Too close to deep water or a river — move further from the coast.');
+
             return;
         }
 
@@ -476,13 +504,17 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         }
 
         if (existingOnCell) {
+            notifyPlacementBlocked(
+                'That tile already has a marker. Remove it first, or choose an empty tile for the flag.',
+            );
+
             return;
         }
 
         const capitalPositions = markers.value
             .filter((m) => m.type === 'capital')
             .map((m) => ({ row: m.row, col: m.col }));
-        const flagCount = markers.value.filter((m) => m.type === 'flag').length;
+        const nonCapitalCount = markers.value.filter((m) => m.type !== 'capital').length;
         const nLand = countPlaceableLandCells(cells.value, gridRows.value, gridCols.value);
         /**
          * {@link computeMinSeparationForMapState} grows spacing when {@link flagBudget} is small
@@ -491,7 +523,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
          * real rules for the final marker set.
          */
         const flagBudget = Math.max(
-            flagCount + 1,
+            nonCapitalCount + 1,
             teamCount.value * 2,
             Math.min(320, Math.max(48, Math.floor(nLand / 3))),
         );
@@ -505,11 +537,15 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         });
 
         for (const m of markers.value) {
-            if (m.type !== 'capital' && m.type !== 'flag') {
+            if (m.type !== 'capital' && m.type !== 'flag' && m.type !== 'infantry' && m.type !== 'tank') {
                 continue;
             }
 
             if (manhattanDistance({ row: gx, col: gy }, { row: m.row, col: m.col }) < sep) {
+                notifyPlacementBlocked(
+                    'Too close to another capital, flag, or troop spawn for this map’s spacing rules.',
+                );
+
                 return;
             }
         }
@@ -523,11 +559,77 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         bumpMarkersRender();
     }
 
+    function placeTroopAt(gx: number, gy: number, troopType: 'infantry' | 'tank'): void {
+        const t = cells.value[gx]?.[gy];
+
+        if (typeof t !== 'string' || !isPlaceableTerrain(t)) {
+            notifyPlacementBlocked(
+                'This terrain cannot hold a troop spawn (hills, mountains, rivers, and water are blocked).',
+            );
+
+            return;
+        }
+
+        if (
+            !isFarEnoughFromHydraulicWaterForMapMarker(
+                cells.value,
+                gridRows.value,
+                gridCols.value,
+                gx,
+                gy,
+            )
+        ) {
+            notifyPlacementBlocked('Too close to deep water or a river — move further from the coast.');
+
+            return;
+        }
+
+        const team = selectedTeam.value ?? 0;
+        const existingOnCell = markers.value.find((m) => m.row === gx && m.col === gy);
+
+        if (existingOnCell?.type === troopType && existingOnCell.team === team) {
+            snapshot();
+            markers.value = markers.value.filter((m) => !(m.row === gx && m.col === gy));
+            dirty.value = true;
+            bumpMarkersRender();
+
+            return;
+        }
+
+        let didSnapshot = false;
+
+        if (existingOnCell?.type === 'infantry' || existingOnCell?.type === 'tank') {
+            snapshot();
+            didSnapshot = true;
+            markers.value = markers.value.filter((m) => !(m.row === gx && m.col === gy));
+            dirty.value = true;
+            bumpMarkersRender();
+        } else if (existingOnCell) {
+            notifyPlacementBlocked(
+                'That tile has a capital or flag. Remove it with the Capital or Flag tool first, then place a spawn.',
+            );
+
+            return;
+        }
+
+        if (!didSnapshot) {
+            snapshot();
+        }
+
+        markers.value = [...markers.value, { type: troopType, team, row: gx, col: gy }];
+        dirty.value = true;
+        bumpMarkersRender();
+    }
+
     function placementClick(gx: number, gy: number): void {
         if (activeTool.value === 'capital') {
             placeCapitalAt(gx, gy);
         } else if (activeTool.value === 'flag') {
             placeFlagAt(gx, gy);
+        } else if (activeTool.value === 'infantry') {
+            placeTroopAt(gx, gy, 'infantry');
+        } else if (activeTool.value === 'tank') {
+            placeTroopAt(gx, gy, 'tank');
         }
     }
 
@@ -721,13 +823,14 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         requestMapViewFit();
     }
 
-    function generateAndApplyMap(seed?: number, type?: MapGenerationType): void {
+    function generateAndApplyMap(seed?: number, type?: MapGenerationType, teamCountArg?: number): void {
         applyGeneratedMap(
             generateRandomMap({
                 seed,
                 type,
                 cellRows: gridRows.value,
                 cellCols: gridCols.value,
+                teamCount: teamCountArg,
             }),
         );
     }

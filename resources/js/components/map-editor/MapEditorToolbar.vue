@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /* eslint-disable vue/no-mutating-props -- editor exposes mutable refs shared by map builder */
 import {
+    Circle,
     Eraser,
     Flag,
     Hand,
@@ -9,6 +10,7 @@ import {
     PaintBucket,
     Paintbrush,
     Plus,
+    RectangleHorizontal,
 } from 'lucide-vue-next';
 import type { LucideIcon } from 'lucide-vue-next';
 import { computed } from 'vue';
@@ -20,12 +22,16 @@ const props = defineProps<{
     editor: MapEditorInstance;
 }>();
 
+const brushRadius = computed(() => props.editor.brushRadius.value);
+
 const tools: { id: MapEditorTool; label: string; icon: LucideIcon }[] = [
     { id: 'brush', label: 'Brush', icon: Paintbrush },
     { id: 'eraser', label: 'Eraser', icon: Eraser },
     { id: 'fill', label: 'Fill', icon: PaintBucket },
     { id: 'capital', label: 'Capital', icon: Landmark },
     { id: 'flag', label: 'Flag', icon: Flag },
+    { id: 'infantry', label: 'Infantry spawn', icon: Circle },
+    { id: 'tank', label: 'Tank spawn', icon: RectangleHorizontal },
     { id: 'pan', label: 'Pan', icon: Hand },
 ];
 
@@ -99,17 +105,17 @@ function selectBrushSize(size: MapEditorBrushSize): void {
                 </button>
                 <span
                     class="flex size-9 flex-col items-center justify-center gap-1 rounded-md border border-foreground/15 bg-muted/40 font-mono text-xs font-semibold tabular-nums"
-                    :title="`Brush radius: ${editor.brushRadius} tiles`"
+                    :title="`Brush radius: ${brushRadius} tiles`"
                 >
                     <span
                         class="rounded-full border border-foreground/50 bg-foreground/20"
                         :style="{
-                            width: `${6 + editor.brushRadius * 3}px`,
-                            height: `${6 + editor.brushRadius * 3}px`,
+                            width: `${6 + brushRadius * 3}px`,
+                            height: `${6 + brushRadius * 3}px`,
                         }"
                         aria-hidden="true"
                     />
-                    {{ editor.brushRadius }}
+                    {{ brushRadius }}
                 </span>
                 <button
                     type="button"
@@ -130,12 +136,12 @@ function selectBrushSize(size: MapEditorBrushSize): void {
                     :class="
                         cn(
                             'rounded-md border px-1 py-0.5 font-mono text-[10px] font-semibold tabular-nums transition-colors',
-                            editor.brushRadius === size
+                            brushRadius === size
                                 ? 'border-foreground bg-muted shadow-inner'
                                 : 'border-transparent text-muted-foreground hover:border-muted-foreground/30 hover:bg-muted/50 hover:text-foreground',
                         )
                     "
-                    :aria-pressed="editor.brushRadius === size"
+                    :aria-pressed="brushRadius === size"
                     :aria-label="`Brush size ${size}`"
                     @click="selectBrushSize(size)"
                 >

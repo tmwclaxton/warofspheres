@@ -40,7 +40,7 @@ final class MapEditorGrid
     /**
      * Empty v2 plains grid with {@see GameConstants::MIN_PLAYERS} teams and no markers (user places capitals).
      *
-     * @return array{version: int, cellRows: int, cellCols: int, cells: list<list<string>>, teamCount: int, markers: list<array{type: string, team: int, row: int, col: int}>, teamPaletteSlots: list<int>}
+     * @return array{version: int, cellRows: int, cellCols: int, cells: list<list<string>>, teamCount: int, markers: list<array{type: string, team: int, row: int, col: int}>, teamPaletteSlots: list<int>} marker type: capital|flag|infantry|tank
      */
     public static function emptyData(?int $cellRows = null, ?int $cellCols = null): array
     {

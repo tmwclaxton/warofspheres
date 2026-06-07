@@ -5,13 +5,17 @@ namespace App\Maps;
 use App\Games\GameConstants;
 
 /**
- * Map editor markers (capitals, flags) and validation for {@see MapEditorGrid} v2 payloads.
+ * Map editor markers (capitals, flags, troop spawns) and validation for {@see MapEditorGrid} v2 payloads.
  */
 final class MapMarkers
 {
     public const string TYPE_CAPITAL = 'capital';
 
     public const string TYPE_FLAG = 'flag';
+
+    public const string TYPE_INFANTRY = 'infantry';
+
+    public const string TYPE_TANK = 'tank';
 
     private const int MIN_MARKER_MANHATTAN_SEP = 6;
 
@@ -162,6 +166,25 @@ final class MapMarkers
     }
 
     /**
+     * @phpstan-assert-if-true non-empty-string $type
+     */
+    public static function isKnownMarkerType(mixed $type): bool
+    {
+        return $type === self::TYPE_CAPITAL
+            || $type === self::TYPE_FLAG
+            || $type === self::TYPE_INFANTRY
+            || $type === self::TYPE_TANK;
+    }
+
+    /**
+     * @phpstan-assert-if-true non-empty-string $type
+     */
+    public static function isTroopMarkerType(mixed $type): bool
+    {
+        return $type === self::TYPE_INFANTRY || $type === self::TYPE_TANK;
+    }
+
+    /**
      * Validate v2 marker rules. Assumes terrain grid is already valid.
      *
      * @param  array<string, mixed>  $data  Full map data (version 2)
@@ -213,10 +236,12 @@ final class MapMarkers
         $occupied = [];
         $capitalsByTeam = [];
         $capitalCoords = [];
-        /** @var list<array{index: int, row: int, col: int}> */
+        /** @var list<array{index: int, row: int, col: int, team: int}> */
         $validFlags = [];
         /** @var list<int> */
         $flagCounts = array_fill(0, $teamCount, 0);
+        /** @var list<array{index: int, row: int, col: int, team: int}> */
+        $validTroops = [];
 
         foreach ($markers as $index => $marker) {
             if (! is_array($marker)) {
@@ -226,8 +251,8 @@ final class MapMarkers
             }
 
             $type = $marker['type'] ?? null;
-            if ($type !== self::TYPE_CAPITAL && $type !== self::TYPE_FLAG) {
-                $errors[] = "markers[{$index}].type must be \"capital\" or \"flag\".";
+            if (! self::isKnownMarkerType($type)) {
+                $errors[] = 'markers['.$index.'].type must be "capital", "flag", "infantry", or "tank".';
 
                 continue;
             }
@@ -290,7 +315,7 @@ final class MapMarkers
 
                 continue;
             }
-            if (($type === self::TYPE_CAPITAL || $type === self::TYPE_FLAG) && ! self::markerHasHydraulicWaterBuffer($cells, $cellRows, $cellCols, $row, $col)) {
+            if (($type === self::TYPE_CAPITAL || $type === self::TYPE_FLAG || self::isTroopMarkerType($type)) && ! self::markerHasHydraulicWaterBuffer($cells, $cellRows, $cellCols, $row, $col)) {
                 $errors[] = "markers[{$index}] is too close to water or a river.";
 
                 continue;
@@ -303,14 +328,16 @@ final class MapMarkers
                     continue;
                 }
                 $capitalsByTeam[$team] = true;
-                $capitalCoords[] = ['row' => $row, 'col' => $col];
+                $capitalCoords[] = ['row' => $row, 'col' => $col, 'team' => $team];
             } elseif ($type === self::TYPE_FLAG) {
-                $validFlags[] = ['index' => $index, 'row' => $row, 'col' => $col];
+                $validFlags[] = ['index' => $index, 'row' => $row, 'col' => $col, 'team' => $team];
                 $flagCounts[$team]++;
+            } elseif (self::isTroopMarkerType($type)) {
+                $validTroops[] = ['index' => $index, 'row' => $row, 'col' => $col, 'team' => $team];
             }
         }
 
-        $flagBudget = max(count($validFlags), $teamCount * 2, 1);
+        $flagBudget = max(count($validFlags), count($validTroops), $teamCount * 2, 1);
         $nLand = self::countPlaceableLandCells($cells, $cellRows, $cellCols);
         $preliminaryMaxR = self::preliminaryMaxRForMarkerSpacing($cellRows, $cellCols);
         $minHalo = self::minPlaceableHaloAmongCapitals($cells, $cellRows, $cellCols, $capitalCoords, $preliminaryMaxR);
@@ -343,6 +370,38 @@ final class MapMarkers
             }
         }
 
+        $troopSep = max(2, (int) floor($sep / 2));
+        $nt = count($validTroops);
+        for ($i = 0; $i < $nt; $i++) {
+            $tr = $validTroops[$i];
+            $trTeam = $tr['team'];
+            foreach ($capitalCoords as $cap) {
+                $d = abs($tr['row'] - $cap['row']) + abs($tr['col'] - $cap['col']);
+                $needSep = $cap['team'] === $trTeam
+                    ? max(self::MIN_MARKER_MANHATTAN_SEP, min(10, (int) floor($sep * 0.42)))
+                    : $sep;
+                if ($d < $needSep) {
+                    $errors[] = "markers[{$tr['index']}] is too close to a capital.";
+                }
+            }
+            foreach ($validFlags as $fl) {
+                $d = abs($tr['row'] - $fl['row']) + abs($tr['col'] - $fl['col']);
+                $needSep = $fl['team'] === $trTeam
+                    ? max(self::MIN_MARKER_MANHATTAN_SEP, min(12, (int) floor($sep * 0.45)))
+                    : $sep;
+                if ($d < $needSep) {
+                    $errors[] = "markers[{$tr['index']}] is too close to a flag.";
+                }
+            }
+            for ($j = $i + 1; $j < $nt; $j++) {
+                $u = $validTroops[$j];
+                $d = abs($tr['row'] - $u['row']) + abs($tr['col'] - $u['col']);
+                if ($d < $troopSep) {
+                    $errors[] = "markers[{$tr['index']}] is too close to another troop spawn.";
+                }
+            }
+        }
+
         $minFlags = min($flagCounts);
         $maxFlags = max($flagCounts);
         if ($minFlags !== $maxFlags) {
@@ -370,6 +429,9 @@ final class MapMarkers
             }
             foreach ($validFlags as $f) {
                 $markerSites[] = ['row' => $f['row'], 'col' => $f['col']];
+            }
+            foreach ($validTroops as $tr) {
+                $markerSites[] = ['row' => $tr['row'], 'col' => $tr['col']];
             }
             if (! self::allMarkerSitesMutuallyAccessible($cells, $cellRows, $cellCols, $markerSites)) {
                 $errors[] = 'Capitals and flags must all lie in one connected region: you cannot seal a team behind an unbroken wall of mountains.';
@@ -437,8 +499,8 @@ final class MapMarkers
             }
 
             $type = $marker['type'] ?? null;
-            if ($type !== self::TYPE_CAPITAL && $type !== self::TYPE_FLAG) {
-                $errors[] = "markers[{$index}].type must be \"capital\" or \"flag\".";
+            if (! self::isKnownMarkerType($type)) {
+                $errors[] = 'markers['.$index.'].type must be "capital", "flag", "infantry", or "tank".';
 
                 continue;
             }

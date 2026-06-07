@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Link, usePage } from '@inertiajs/vue3';
 import {
+    BookOpen,
     Clock3,
     History,
     Map,
@@ -19,7 +20,7 @@ import FactionSwatches from '@/components/FactionSwatches.vue';
 import UserMenuContent from '@/components/UserMenuContent.vue';
 import { useCurrentUrl } from '@/composables/useCurrentUrl';
 import { getInitials } from '@/composables/useInitials';
-import { home, mapBuilder } from '@/routes';
+import { home, mapBuilder, wiki } from '@/routes';
 import { index as lobbies } from '@/routes/lobbies';
 import { ongoing, past } from '@/routes/matches';
 import type { NavItem } from '@/types';
@@ -29,6 +30,7 @@ const auth = computed(() => page.props.auth);
 const { isCurrentOrParentUrl } = useCurrentUrl();
 
 const navItems = computed<NavItem[]>(() => [
+    { title: 'Wiki', href: wiki().url, icon: BookOpen },
     { title: 'Map Builder', href: mapBuilder().url, icon: Map },
     { title: 'Lobbies', href: lobbies().url, icon: Users },
     { title: 'Ongoing', href: ongoing().url, icon: Clock3 },

@@ -5,6 +5,52 @@ export type MarkerSpacingCell = { row: number; col: number };
 /** Absolute floor for flag–flag and flag–capital Manhattan clearance (matches generator). */
 export const MAP_MARKER_MIN_MANHATTAN_SEP = 6;
 
+/**
+ * Caps flag–capital / flag–flag spacing on very small land budgets so procedural maps can still
+ * place outposts (troop generator depends on flags for targets and anchor bands).
+ */
+export function clampMinBetweenFlagsForSmallLand(
+    minBetweenFlags: number,
+    nLand: number,
+    minDim: number,
+): number {
+    if (nLand >= 120) {
+        return minBetweenFlags;
+    }
+
+    if (nLand < 70) {
+        return Math.max(MAP_MARKER_MIN_MANHATTAN_SEP, Math.min(minBetweenFlags, 6));
+    }
+
+    const relaxedCap = Math.max(4, Math.min(10, Math.floor(minDim / 4)));
+
+    return Math.max(MAP_MARKER_MIN_MANHATTAN_SEP, Math.min(minBetweenFlags, relaxedCap));
+}
+
+/**
+ * Manhattan clearance required from a troop spawn to a capital or flag. Enemy markers use the
+ * full map `separation`; same-team markers use a smaller ring so armies can sit on home ground
+ * near their posts (matches server {@see App\Maps\MapMarkers::validate}).
+ */
+export function troopManhattanClearanceToMarker(
+    separation: number,
+    markerTeam: number,
+    troopTeam: number,
+    markerKind: 'capital' | 'flag',
+): number {
+    if (markerTeam !== troopTeam) {
+        return separation;
+    }
+
+    const cap = markerKind === 'capital' ? 10 : 12;
+    const ratio = markerKind === 'capital' ? 0.42 : 0.45;
+
+    return Math.max(
+        MAP_MARKER_MIN_MANHATTAN_SEP,
+        Math.min(cap, Math.floor(separation * ratio)),
+    );
+}
+
 export function manhattanDistance(a: MarkerSpacingCell, b: MarkerSpacingCell): number {
     return Math.abs(a.row - b.row) + Math.abs(a.col - b.col);
 }

@@ -1,5 +1,5 @@
-import { computeMinSeparationForMapState, manhattanDistance } from '@/lib/mapMarkerSpacing';
 import { isFarEnoughFromHydraulicWaterForMapMarker, isPlaceableTerrain } from '@/lib/mapMarkers';
+import { computeMinSeparationForMapState, manhattanDistance, troopManhattanClearanceToMarker } from '@/lib/mapMarkerSpacing';
 import { isTerrainId } from '@/lib/terrainCatalog';
 
 /** Live battlefield vertex grid (App\Games\GameConstants rows+1 / cols+1). */
@@ -116,7 +116,7 @@ function allMarkerSitesMutuallyAccessible(
 export const MAP_EDITOR_CELL_PX = 60;
 
 export type MapMarker = {
-    type: 'capital' | 'flag';
+    type: 'capital' | 'flag' | 'infantry' | 'tank';
     team: number;
     row: number;
     col: number;
@@ -366,8 +366,9 @@ export function validateMapMarkers(data: MapDataPayload): string[] {
     const cells = data.cells;
     const occupied = new Set<string>();
     const capitalsByTeam = new Map<number, true>();
-    const capitalPositions: { row: number; col: number }[] = [];
-    const validFlagPositions: { index: number; row: number; col: number }[] = [];
+    const capitalPositions: Array<{ row: number; col: number; team: number }> = [];
+    const validFlagPositions: { index: number; row: number; col: number; team: number }[] = [];
+    const validTroopPositions: { index: number; row: number; col: number; team: number }[] = [];
     const flagCounts = new Array(teamCount).fill(0);
 
     for (let index = 0; index < markers.length; index++) {
@@ -381,8 +382,8 @@ export function validateMapMarkers(data: MapDataPayload): string[] {
 
         const { type, team, row, col } = marker;
 
-        if (type !== 'capital' && type !== 'flag') {
-            errors.push(`markers[${index}].type must be "capital" or "flag".`);
+        if (type !== 'capital' && type !== 'flag' && type !== 'infantry' && type !== 'tank') {
+            errors.push(`markers[${index}].type must be "capital", "flag", "infantry", or "tank".`);
 
             continue;
         }
@@ -436,7 +437,7 @@ export function validateMapMarkers(data: MapDataPayload): string[] {
         }
 
         if (
-            (type === 'capital' || type === 'flag') &&
+            (type === 'capital' || type === 'flag' || type === 'infantry' || type === 'tank') &&
             !isFarEnoughFromHydraulicWaterForMapMarker(cells, cellRows, cellCols, row, col)
         ) {
             errors.push(`markers[${index}] is too close to water or a river.`);
@@ -452,14 +453,21 @@ export function validateMapMarkers(data: MapDataPayload): string[] {
             }
 
             capitalsByTeam.set(team, true);
-            capitalPositions.push({ row, col });
+            capitalPositions.push({ row, col, team });
         } else if (type === 'flag') {
-            validFlagPositions.push({ index, row, col });
+            validFlagPositions.push({ index, row, col, team });
             flagCounts[team] += 1;
+        } else {
+            validTroopPositions.push({ index, row, col, team });
         }
     }
 
-    const flagBudget = Math.max(validFlagPositions.length, teamCount * 2, 1);
+    const flagBudget = Math.max(
+        validFlagPositions.length,
+        validTroopPositions.length,
+        teamCount * 2,
+        1,
+    );
     const sep = computeMinSeparationForMapState({
         cells,
         rows: cellRows,
@@ -483,6 +491,36 @@ export function validateMapMarkers(data: MapDataPayload): string[] {
 
             if (manhattanDistance({ row: a.row, col: a.col }, { row: b.row, col: b.col }) < sep) {
                 errors.push(`markers[${a.index}] is too close to another flag.`);
+            }
+        }
+    }
+
+    const troopSep = Math.max(2, Math.floor(sep / 2));
+
+    for (let i = 0; i < validTroopPositions.length; i++) {
+        const tr = validTroopPositions[i]!;
+
+        for (const cap of capitalPositions) {
+            const need = troopManhattanClearanceToMarker(sep, cap.team, tr.team, 'capital');
+
+            if (manhattanDistance({ row: tr.row, col: tr.col }, cap) < need) {
+                errors.push(`markers[${tr.index}] is too close to a capital.`);
+            }
+        }
+
+        for (const fl of validFlagPositions) {
+            const need = troopManhattanClearanceToMarker(sep, fl.team, tr.team, 'flag');
+
+            if (manhattanDistance({ row: tr.row, col: tr.col }, { row: fl.row, col: fl.col }) < need) {
+                errors.push(`markers[${tr.index}] is too close to a flag.`);
+            }
+        }
+
+        for (let j = i + 1; j < validTroopPositions.length; j++) {
+            const u = validTroopPositions[j]!;
+
+            if (manhattanDistance({ row: tr.row, col: tr.col }, { row: u.row, col: u.col }) < troopSep) {
+                errors.push(`markers[${tr.index}] is too close to another troop spawn.`);
             }
         }
     }
@@ -511,6 +549,7 @@ export function validateMapMarkers(data: MapDataPayload): string[] {
         const sites = [
             ...capitalPositions,
             ...validFlagPositions.map((f) => ({ row: f.row, col: f.col })),
+            ...validTroopPositions.map((t) => ({ row: t.row, col: t.col })),
         ];
 
         if (!allMarkerSitesMutuallyAccessible(cells, cellRows, cellCols, sites)) {

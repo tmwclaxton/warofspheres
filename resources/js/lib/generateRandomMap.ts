@@ -1,4 +1,5 @@
 import { buildMarkersForGeneratedTerrain } from '@/lib/generateMapMarkers';
+import { buildTroopMarkersForGeneratedMap } from '@/lib/generateTroopSpawns';
 import {
     DEFAULT_MAP_CELL_COLS,
     DEFAULT_MAP_CELL_ROWS,
@@ -55,6 +56,8 @@ export type MapGenerationOptions = {
     type?: MapGenerationType;
     cellRows?: number;
     cellCols?: number;
+    /** When set, generator aims for this many teams (clamped to map rules). */
+    teamCount?: number;
 };
 
 type GenerationProfile = {
@@ -1478,12 +1481,16 @@ export function generateRandomMap(options: MapGenerationOptions = {}): Generated
     }
 
     if (profile.islandMask) {
-        pruneTinyLandIsles(
-            cells,
-            rows,
-            cols,
-            Math.max(60, Math.floor(Math.min(rows, cols) * 0.12)),
-        );
+        const minDim = Math.min(rows, cols);
+
+        if (minDim >= 100) {
+            pruneTinyLandIsles(
+                cells,
+                rows,
+                cols,
+                Math.max(60, Math.floor(minDim * 0.12)),
+            );
+        }
     }
 
     if (profile.carveRivers) {
@@ -1510,8 +1517,40 @@ export function generateRandomMap(options: MapGenerationOptions = {}): Generated
         ensureMountainAccessibility(cells, elev, rows, cols);
     }
 
+    const minDim = Math.min(rows, cols);
     const markerRng = mulberry32((s ^ 0xca501abe) >>> 0);
-    const { teamCount, markers } = buildMarkersForGeneratedTerrain(cells, rows, cols, markerRng);
+    const requestedTeamCount =
+        options.teamCount !== undefined && Number.isFinite(options.teamCount)
+            ? Math.round(options.teamCount)
+            : undefined;
+    const { teamCount, markers } = buildMarkersForGeneratedTerrain(
+        cells,
+        rows,
+        cols,
+        markerRng,
+        requestedTeamCount,
+    );
+    const troopSpawns = buildTroopMarkersForGeneratedMap(cells, rows, cols, markers, teamCount, markerRng, {
+        islandLike: profile.islandMask && minDim >= 96,
+    });
+
+    if (
+        troopSpawns.length === 0
+        && teamCount >= 2
+        && profile.islandMask
+        && minDim < 120
+        && type === 'islands'
+    ) {
+        return generateRandomMap({
+            ...options,
+            cellRows,
+            cellCols,
+            type: 'mix',
+            seed: (s ^ 0x0badf00d) >>> 0,
+        });
+    }
+
+    const allMarkers = [...markers, ...troopSpawns];
 
     return {
         version: 2,
@@ -1519,7 +1558,7 @@ export function generateRandomMap(options: MapGenerationOptions = {}): Generated
         cellCols: cols,
         cells,
         teamCount,
-        markers,
+        markers: allMarkers,
         teamPaletteSlots: defaultTeamPaletteSlots(teamCount),
     };
 }

@@ -3,7 +3,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { MAP_EDITOR_MAX_ZOOM, MAP_EDITOR_MIN_ZOOM } from '@/composables/useMapEditor';
 import type { MapEditorInstance } from '@/composables/useMapEditor';
-import { drawCapitalMarker, drawFlagMarker } from '@/lib/mapMarkers';
+import { drawCapitalMarker, drawFlagMarker, drawInfantryMarker, drawTankMarker } from '@/lib/mapMarkers';
 import { editorBlendedTerrainFillStyle } from '@/lib/terrainRender';
 
 const props = defineProps<{
@@ -113,11 +113,19 @@ const placementHint = computed(() => {
     const t = props.editor.activeTool.value;
 
     if (t === 'capital') {
-        return 'Click land to place or move this team’s capital. Click a flag to remove it.';
+        return 'Click land to place or move this team’s capital. Click a flag or troop spawn on the cell to clear it first.';
     }
 
     if (t === 'flag') {
         return 'Click land to place a flag for this team. Click an existing flag to remove it.';
+    }
+
+    if (t === 'infantry') {
+        return 'Click passable land to place infantry. Click an existing infantry or tank on the tile to remove it, or replace it with infantry. Capitals and flags must be cleared with their own tools.';
+    }
+
+    if (t === 'tank') {
+        return 'Click passable land to place a tank. Click an existing infantry or tank on the tile to remove it, or replace it with a tank. Capitals and flags must be cleared with their own tools.';
     }
 
     return '';
@@ -244,6 +252,12 @@ function draw(): void {
 
         if (m.type === 'capital') {
             drawCapitalMarker(ctx, m.row, m.col, hex, cs);
+        } else if (m.type === 'flag') {
+            drawFlagMarker(ctx, m.row, m.col, hex, cs);
+        } else if (m.type === 'infantry') {
+            drawInfantryMarker(ctx, m.row, m.col, hex, cs);
+        } else if (m.type === 'tank') {
+            drawTankMarker(ctx, m.row, m.col, hex, cs);
         } else {
             drawFlagMarker(ctx, m.row, m.col, hex, cs);
         }
@@ -291,7 +305,12 @@ function onPointerDown(e: PointerEvent): void {
         return;
     }
 
-    if (props.editor.activeTool.value === 'capital' || props.editor.activeTool.value === 'flag') {
+    if (
+        props.editor.activeTool.value === 'capital'
+        || props.editor.activeTool.value === 'flag'
+        || props.editor.activeTool.value === 'infantry'
+        || props.editor.activeTool.value === 'tank'
+    ) {
         props.editor.placementClick(gx, gy);
         scheduleDraw();
 

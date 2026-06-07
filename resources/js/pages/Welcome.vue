@@ -2,7 +2,7 @@
 import { Head, Link, usePage } from '@inertiajs/vue3';
 import { Swords } from 'lucide-vue-next';
 import { Button } from '@/components/ui/button';
-import { login } from '@/routes';
+import { login, wiki } from '@/routes';
 import { index as lobbiesIndex } from '@/routes/lobbies';
 
 withDefaults(
@@ -83,6 +83,9 @@ const steps = [
                         </div>
                     </div>
                     <nav class="flex gap-2">
+                        <Link :href="wiki().url">
+                            <Button variant="ghost">Wiki</Button>
+                        </Link>
                         <Link v-if="page.props.auth.user" :href="lobbiesIndex().url">
                             <Button>Play Now</Button>
                         </Link>

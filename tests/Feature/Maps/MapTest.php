@@ -318,6 +318,38 @@ class MapTest extends TestCase
         $this->assertCount(4, $map->data['markers']);
     }
 
+    public function test_store_v2_accepts_infantry_and_tank_markers(): void
+    {
+        $user = User::factory()->create();
+        $data = $this->v2DataWithTwoCapitals(24, 18);
+        $data['markers'][] = [
+            'type' => MapMarkers::TYPE_INFANTRY,
+            'team' => 0,
+            'row' => 12,
+            'col' => 12,
+        ];
+        $data['markers'][] = [
+            'type' => MapMarkers::TYPE_TANK,
+            'team' => 1,
+            'row' => 22,
+            'col' => 16,
+        ];
+
+        $this->actingAs($user)
+            ->postJson(route('maps.store'), [
+                'name' => 'Troop spawns',
+                'data' => $data,
+            ])
+            ->assertCreated()
+            ->assertJsonPath('map.data.version', 2);
+
+        $map = Map::query()->where('user_id', $user->id)->firstOrFail();
+        $this->assertCount(4, $map->data['markers']);
+        $types = array_column($map->data['markers'], 'type');
+        $this->assertContains(MapMarkers::TYPE_INFANTRY, $types);
+        $this->assertContains(MapMarkers::TYPE_TANK, $types);
+    }
+
     public function test_store_v2_accepts_incomplete_markers_as_draft(): void
     {
         $user = User::factory()->create();
