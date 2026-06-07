@@ -1,11 +1,19 @@
 <script setup lang="ts">
+/* eslint-disable vue/no-mutating-props -- editor exposes mutable refs shared by map builder */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { MAP_EDITOR_MAX_ZOOM, MAP_EDITOR_MIN_ZOOM, type MapEditorInstance } from '@/composables/useMapEditor';
+import { MAP_EDITOR_MAX_ZOOM, MAP_EDITOR_MIN_ZOOM } from '@/composables/useMapEditor';
+import type { MapEditorInstance } from '@/composables/useMapEditor';
+import { drawCapitalMarker, drawFlagMarker } from '@/lib/mapMarkers';
 import { editorBlendedTerrainFillStyle } from '@/lib/terrainRender';
 
 const props = defineProps<{
     editor: MapEditorInstance;
+    teamColors: { slot: number; hex: string; label: string }[];
 }>();
+
+function hexForTeam(team: number): string {
+    return props.teamColors.find((c) => c.slot === team)?.hex ?? '#888888';
+}
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 let painting = false;
@@ -23,6 +31,11 @@ const VIEWPORT_VOID = '#a8ad9a';
 const WORKSPACE_FILL = '#c9cfba';
 
 /**
+ * Semi-transparent overlay on playable cells only so markers read brighter than terrain.
+ */
+const MAP_TERRAIN_DIM_ALPHA = 0.08;
+
+/**
  * Exponential wheel zoom: factor = exp(-deltaPx * sensitivity).
  * Higher values feel faster for both mouse wheels and trackpads.
  */
@@ -33,6 +46,7 @@ function wheelDeltaPx(e: WheelEvent, viewportHeightPx: number): number {
     if (e.deltaMode === WheelEvent.DOM_DELTA_LINE) {
         return e.deltaY * 16;
     }
+
     if (e.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
         return e.deltaY * viewportHeightPx;
     }
@@ -53,9 +67,11 @@ function niceTileCount(raw: number): number {
     if (normalized < 1.5) {
         return magnitude;
     }
+
     if (normalized < 3.5) {
         return 2 * magnitude;
     }
+
     if (normalized < 7.5) {
         return 5 * magnitude;
     }
@@ -86,6 +102,20 @@ const tileScale = computed(() => {
     };
 });
 
+const placementHint = computed(() => {
+    const t = props.editor.activeTool.value;
+
+    if (t === 'capital') {
+        return 'Click land to place or move this team’s capital.';
+    }
+
+    if (t === 'flag') {
+        return 'Click land to place a flag for this team.';
+    }
+
+    return '';
+});
+
 function screenToWorld(sx: number, sy: number): [number, number] {
     const z = props.editor.zoom.value;
 
@@ -98,6 +128,7 @@ function worldToGrid(wx: number, wy: number): [number, number] | null {
     const gy = Math.floor(wy / cs);
     const nRows = props.editor.gridRows.value;
     const nCols = props.editor.gridCols.value;
+
     if (gx < 0 || gx >= nRows || gy < 0 || gy >= nCols) {
         return null;
     }
@@ -107,13 +138,17 @@ function worldToGrid(wx: number, wy: number): [number, number] | null {
 
 function applyFitToViewport(): void {
     const canvas = canvasRef.value;
+
     if (!canvas) {
         return;
     }
+
     const r = canvas.getBoundingClientRect();
+
     if (r.width < 16 || r.height < 16) {
         return;
     }
+
     props.editor.fitMapToView(r.width, r.height);
 }
 
@@ -121,6 +156,7 @@ function scheduleDraw(): void {
     if (renderPending) {
         return;
     }
+
     renderPending = true;
     renderRaf = requestAnimationFrame(() => {
         renderPending = false;
@@ -134,16 +170,19 @@ function cancelScheduledDraw(): void {
         cancelAnimationFrame(renderRaf);
         renderRaf = 0;
     }
+
     renderPending = false;
 }
 
 function draw(): void {
     const canvas = canvasRef.value;
+
     if (!canvas) {
         return;
     }
 
     const ctx = canvas.getContext('2d', { alpha: false });
+
     if (!ctx) {
         return;
     }
@@ -153,10 +192,12 @@ function draw(): void {
     const dpr = window.devicePixelRatio || 1;
     const nextW = Math.max(1, Math.round(rect.width * dpr));
     const nextH = Math.max(1, Math.round(rect.height * dpr));
+
     if (canvas.width !== nextW || canvas.height !== nextH) {
         canvas.width = nextW;
         canvas.height = nextH;
     }
+
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.imageSmoothingEnabled = false;
 
@@ -188,11 +229,25 @@ function draw(): void {
         }
     }
 
+    ctx.fillStyle = `rgba(0, 0, 0, ${MAP_TERRAIN_DIM_ALPHA})`;
+    ctx.fillRect(0, 0, ww, wh);
+
+    for (const m of props.editor.markers.value) {
+        const hex = hexForTeam(m.team);
+
+        if (m.type === 'capital') {
+            drawCapitalMarker(ctx, m.row, m.col, hex, cs);
+        } else {
+            drawFlagMarker(ctx, m.row, m.col, hex, cs);
+        }
+    }
+
     ctx.restore();
 }
 
 function onPointerDown(e: PointerEvent): void {
     const canvas = canvasRef.value;
+
     if (!canvas) {
         return;
     }
@@ -215,6 +270,7 @@ function onPointerDown(e: PointerEvent): void {
 
     const world = screenToWorld(sx, sy);
     const grid = worldToGrid(world[0], world[1]);
+
     if (!grid) {
         return;
     }
@@ -223,6 +279,13 @@ function onPointerDown(e: PointerEvent): void {
 
     if (props.editor.activeTool.value === 'fill') {
         props.editor.clickTool(gx, gy);
+        scheduleDraw();
+
+        return;
+    }
+
+    if (props.editor.activeTool.value === 'capital' || props.editor.activeTool.value === 'flag') {
+        props.editor.placementClick(gx, gy);
         scheduleDraw();
 
         return;
@@ -237,6 +300,7 @@ function onPointerDown(e: PointerEvent): void {
 
 function onPointerMove(e: PointerEvent): void {
     const canvas = canvasRef.value;
+
     if (!canvas) {
         return;
     }
@@ -260,6 +324,7 @@ function onPointerMove(e: PointerEvent): void {
 
     const world = screenToWorld(sx, sy);
     const grid = worldToGrid(world[0], world[1]);
+
     if (grid) {
         props.editor.strokePaint(grid[0], grid[1]);
         scheduleDraw();
@@ -268,12 +333,15 @@ function onPointerMove(e: PointerEvent): void {
 
 function onPointerUp(e: PointerEvent): void {
     const canvas = canvasRef.value;
+
     if (canvas?.hasPointerCapture(e.pointerId)) {
         canvas.releasePointerCapture(e.pointerId);
     }
+
     if (painting) {
         props.editor.endStroke();
     }
+
     painting = false;
     panning = false;
 }
@@ -281,6 +349,7 @@ function onPointerUp(e: PointerEvent): void {
 function onWheel(e: WheelEvent): void {
     e.preventDefault();
     const canvas = canvasRef.value;
+
     if (!canvas) {
         return;
     }
@@ -290,6 +359,7 @@ function onWheel(e: WheelEvent): void {
     const sy = e.clientY - rect.top;
     const oldZoom = props.editor.zoom.value;
     const deltaPx = wheelDeltaPx(e, rect.height);
+
     if (deltaPx === 0) {
         return;
     }
@@ -312,6 +382,7 @@ function onWheel(e: WheelEvent): void {
 
 function onKeyDown(e: KeyboardEvent): void {
     const target = e.target as Node | null;
+
     if (
         target instanceof HTMLInputElement
         || target instanceof HTMLTextAreaElement
@@ -320,19 +391,24 @@ function onKeyDown(e: KeyboardEvent): void {
     ) {
         return;
     }
+
     if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
         e.preventDefault();
+
         if (e.shiftKey) {
             props.editor.redo();
         } else {
             props.editor.undo();
         }
+
         scheduleDraw();
     }
+
     if (e.key === '[') {
         e.preventDefault();
         props.editor.bumpBrush(-1);
     }
+
     if (e.key === ']') {
         e.preventDefault();
         props.editor.bumpBrush(1);
@@ -344,9 +420,11 @@ onMounted(() => {
     resizeObserver = new ResizeObserver(() => {
         scheduleDraw();
     });
+
     if (canvasRef.value) {
         resizeObserver.observe(canvasRef.value);
     }
+
     void nextTick(() => {
         applyFitToViewport();
         draw();
@@ -374,6 +452,7 @@ watch(
 watch(
     () => [
         props.editor.terrainEpoch.value,
+        props.editor.markersEpoch.value,
         props.editor.zoom.value,
         props.editor.camX.value,
         props.editor.camY.value,
@@ -384,6 +463,14 @@ watch(
 
 <template>
     <div class="relative h-full min-h-0 w-full min-w-0">
+        <div
+            v-if="placementHint"
+            role="status"
+            aria-live="polite"
+            class="pointer-events-none absolute top-3 left-1/2 z-10 max-w-[min(36rem,calc(100%-2rem))] -translate-x-1/2 rounded-md border-2 border-foreground/40 bg-[#a8ad9a] px-4 py-2 text-center text-xs font-medium leading-snug text-foreground shadow-sm"
+        >
+            {{ placementHint }}
+        </div>
         <canvas
             ref="canvasRef"
             class="h-full min-h-0 w-full min-w-0 cursor-crosshair touch-none rounded-lg border-2 border-foreground bg-wod-paper"

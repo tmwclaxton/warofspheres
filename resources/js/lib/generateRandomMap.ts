@@ -1,18 +1,21 @@
+import { buildMarkersForGeneratedTerrain } from '@/lib/generateMapMarkers';
 import {
     DEFAULT_MAP_CELL_COLS,
     DEFAULT_MAP_CELL_ROWS,
     isAllowedMapGridSize,
 } from '@/lib/mapEditorGrid';
+import type { MapMarker } from '@/lib/mapEditorGrid';
 import type { TerrainId } from '@/lib/terrainCatalog';
 import { WATER_TERRAINS } from '@/lib/terrainCatalog';
 
-/** Matches MapDataPayload from the editor / API. */
+/** Terrain + optional v2 markers when produced by {@link generateRandomMap}. */
 export type GeneratedMapData = {
-    version: number;
+    version: 1 | 2;
     cellRows: number;
     cellCols: number;
     cells: string[][];
-    bridges: boolean[][];
+    teamCount?: number;
+    markers?: MapMarker[];
 };
 
 export type MapGenerationType = 'mix' | 'islands' | 'desert' | 'mountains';
@@ -30,7 +33,8 @@ export const MAP_GENERATION_TYPE_OPTIONS: ReadonlyArray<{
     {
         id: 'islands',
         label: 'Islands',
-        description: 'Two to four large islands in open ocean.',
+        description:
+            'Two to four large islands in open ocean, with shallow coastal water, beaches, and deep sea beyond.',
     },
     {
         id: 'desert',
@@ -180,9 +184,11 @@ function classify(elevation: number, moisture: number): TerrainId {
     if (e < 0.14) {
         return 'deep_water';
     }
+
     if (e < 0.24) {
         return 'water';
     }
+
     if (e < 0.3) {
         if (m > 0.55) {
             return 'swamp';
@@ -190,26 +196,31 @@ function classify(elevation: number, moisture: number): TerrainId {
 
         return 'beach';
     }
+
     if (e < 0.38) {
         if (m > 0.58) {
             return 'swamp';
         }
+
         if (m < 0.32) {
             return 'beach';
         }
 
         return 'meadow';
     }
+
     if (e < 0.55) {
         if (m < 0.28) {
             return 'desert';
         }
+
         if (m > 0.62) {
             return 'forest';
         }
 
         return 'plains';
     }
+
     if (e < 0.68) {
         if (m > 0.72) {
             return 'dense_forest';
@@ -217,6 +228,7 @@ function classify(elevation: number, moisture: number): TerrainId {
 
         return 'forest';
     }
+
     if (e < 0.82) {
         return 'hill';
     }
@@ -262,33 +274,44 @@ function collectPassableComponents(
             if (!isPassableLand(cells[x][y])) {
                 continue;
             }
+
             const start = mapCellKey(x, y);
+
             if (visited.has(start)) {
                 continue;
             }
+
             const patch: GridCell[] = [];
             const queue: GridCell[] = [[x, y]];
             visited.add(start);
+
             while (queue.length > 0) {
                 const [cx, cy] = queue.shift()!;
                 patch.push([cx, cy]);
+
                 for (const [dx, dy] of PASSABLE_DIRS) {
                     const nx = cx + dx;
                     const ny = cy + dy;
+
                     if (nx < 0 || nx >= rows || ny < 0 || ny >= cols) {
                         continue;
                     }
+
                     if (!isPassableLand(cells[nx][ny])) {
                         continue;
                     }
+
                     const key = mapCellKey(nx, ny);
+
                     if (visited.has(key)) {
                         continue;
                     }
+
                     visited.add(key);
                     queue.push([nx, ny]);
                 }
             }
+
             components.push(patch);
         }
     }
@@ -308,14 +331,18 @@ function bresenhamLineKeys(x0: number, y0: number, x1: number, y1: number): stri
 
     while (true) {
         keys.push(mapCellKey(x, y));
+
         if (x === x1 && y === y1) {
             break;
         }
+
         const e2 = 2 * err;
+
         if (e2 > -dy) {
             err -= dy;
             x += sx;
         }
+
         if (e2 < dx) {
             err += dx;
             y += sy;
@@ -336,18 +363,23 @@ function carvePassCells(
 
     for (const key of keys) {
         const [x, y] = parseMapCellKey(key);
+
         if (x < 0 || x >= rows || y < 0 || y >= cols) {
             continue;
         }
+
         if (cells[x][y] === 'mountain') {
             toCarve.add(key);
         }
+
         for (const [dx, dy] of PASSABLE_DIRS) {
             const nx = x + dx;
             const ny = y + dy;
+
             if (nx < 0 || nx >= rows || ny < 0 || ny >= cols) {
                 continue;
             }
+
             if (cells[nx][ny] === 'mountain') {
                 toCarve.add(mapCellKey(nx, ny));
             }
@@ -384,31 +416,40 @@ function connectComponentToMain(
 
     while (queue.length > 0 && endKey === null) {
         const [x, y] = queue.shift()!;
+
         for (const [dx, dy] of PASSABLE_DIRS) {
             const nx = x + dx;
             const ny = y + dy;
+
             if (nx < 0 || nx >= rows || ny < 0 || ny >= cols) {
                 continue;
             }
+
             const nk = mapCellKey(nx, ny);
+
             if (visited.has(nk)) {
                 continue;
             }
+
             const terrain = cells[nx][ny];
+
             if (terrain === 'mountain') {
                 visited.add(nk);
                 parent.set(nk, [x, y]);
                 queue.push([nx, ny]);
                 continue;
             }
+
             if (!isPassableLand(terrain)) {
                 continue;
             }
+
             if (mainSet.has(nk)) {
                 endKey = nk;
                 parent.set(nk, [x, y]);
                 break;
             }
+
             if (!orphanSet.has(nk)) {
                 visited.add(nk);
                 parent.set(nk, [x, y]);
@@ -420,14 +461,18 @@ function connectComponentToMain(
     if (endKey !== null) {
         const path: string[] = [];
         let cur: string | null = endKey;
+
         while (cur !== null) {
             const [x, y] = parseMapCellKey(cur);
+
             if (cells[x][y] === 'mountain') {
                 path.push(cur);
             }
+
             const prev = parent.get(cur) ?? null;
             cur = prev === null ? null : mapCellKey(prev[0], prev[1]);
         }
+
         carvePassCells(cells, elev, rows, cols, path);
 
         return;
@@ -435,18 +480,22 @@ function connectComponentToMain(
 
     let sx = 0;
     let sy = 0;
+
     for (const [x, y] of orphan) {
         sx += x;
         sy += y;
     }
+
     sx = Math.round(sx / orphan.length);
     sy = Math.round(sy / orphan.length);
     let mx = 0;
     let my = 0;
+
     for (const [x, y] of main) {
         mx += x;
         my += y;
     }
+
     mx = Math.round(mx / main.length);
     my = Math.round(my / main.length);
 
@@ -464,6 +513,7 @@ function ensureMountainAccessibility(
 
     for (let attempt = 0; attempt < 48; attempt++) {
         const components = collectPassableComponents(cells, rows, cols);
+
         if (components.length <= 1) {
             return;
         }
@@ -474,9 +524,11 @@ function ensureMountainAccessibility(
 
         for (let i = 1; i < components.length; i++) {
             const orphan = components[i]!;
+
             if (orphan.length < minOrphanCells) {
                 continue;
             }
+
             connectComponentToMain(cells, elev, rows, cols, orphan, main);
             connected = true;
             break;
@@ -504,9 +556,11 @@ function classifyDesert(elevation: number, moisture: number, oasis: number): Ter
     if (elevation < 0.14) {
         return 'deep_water';
     }
+
     if (elevation < 0.24) {
         return 'water';
     }
+
     if (elevation < 0.3) {
         if (oasis > 0.35) {
             return 'meadow';
@@ -514,9 +568,11 @@ function classifyDesert(elevation: number, moisture: number, oasis: number): Ter
 
         return 'beach';
     }
+
     if (elevation >= 0.8) {
         return 'mountain';
     }
+
     if (elevation >= 0.66) {
         return 'hill';
     }
@@ -524,12 +580,15 @@ function classifyDesert(elevation: number, moisture: number, oasis: number): Ter
     if (oasis > 0.72) {
         return moisture > 0.38 ? 'forest' : 'meadow';
     }
+
     if (oasis > 0.48) {
         return 'meadow';
     }
+
     if (oasis > 0.28) {
         return 'plains';
     }
+
     if (oasis > 0.14) {
         return 'meadow';
     }
@@ -560,10 +619,13 @@ function spreadOasisGreenery(
             for (const [dx, dy] of PASSABLE_DIRS) {
                 const nx = x + dx;
                 const ny = y + dy;
+
                 if (nx < 0 || nx >= rows || ny < 0 || ny >= cols) {
                     continue;
                 }
+
                 localOasis = Math.max(localOasis, oasisStrength(nx, ny, scale, oasisOx, oasisOy));
+
                 if (DESERT_GREENERY.has(cells[nx][ny] as TerrainId)) {
                     touchesGreen = true;
                 }
@@ -606,11 +668,13 @@ function capDesertGreenery(
     for (let x = 0; x < rows; x++) {
         for (let y = 0; y < cols; y++) {
             const terrain = cells[x][y] as TerrainId;
+
             if (!DESERT_GREENERY.has(terrain)) {
                 continue;
             }
 
             const start = `${x},${y}`;
+
             if (seen.has(start)) {
                 continue;
             }
@@ -623,6 +687,7 @@ function capDesertGreenery(
                 const key = queue.pop()!;
                 patch.push(key);
                 const [cx, cy] = key.split(',').map(Number);
+
                 for (const [dx, dy] of [
                     [1, 0],
                     [-1, 0],
@@ -631,16 +696,21 @@ function capDesertGreenery(
                 ] as GridCell[]) {
                     const nx = cx + dx;
                     const ny = cy + dy;
+
                     if (nx < 0 || nx >= rows || ny < 0 || ny >= cols) {
                         continue;
                     }
+
                     const next = `${nx},${ny}`;
+
                     if (seen.has(next)) {
                         continue;
                     }
+
                     if (!DESERT_GREENERY.has(cells[nx][ny] as TerrainId)) {
                         continue;
                     }
+
                     seen.add(next);
                     queue.push(next);
                 }
@@ -684,11 +754,13 @@ function buildArchipelagoSeeds(rows: number, cols: number, rng: () => number): A
         const strait = Math.max(minDim * 0.03, minDim * 0.08 - Math.floor(attempt / 100) * 0.01);
 
         let spaced = true;
+
         for (const existing of seeds) {
             const dx = cx - existing.cx;
             const dy = cy - existing.cy;
             const dist = Math.sqrt(dx * dx + dy * dy);
             const minGap = radius + existing.radius + strait;
+
             if (dist < minGap) {
                 spaced = false;
                 break;
@@ -706,23 +778,28 @@ function buildArchipelagoSeeds(rows: number, cols: number, rng: () => number): A
         [0.34, 0.72],
         [0.68, 0.28],
     ];
+
     for (const [nx, ny] of fallbackSlots) {
         if (seeds.length >= targetCount) {
             break;
         }
+
         const radius = minDim * 0.19;
         const cx = nx * rows;
         const cy = ny * cols;
         let spaced = true;
+
         for (const existing of seeds) {
             const dx = cx - existing.cx;
             const dy = cy - existing.cy;
             const dist = Math.sqrt(dx * dx + dy * dy);
+
             if (dist < radius + existing.radius + minDim * 0.04) {
                 spaced = false;
                 break;
             }
         }
+
         if (spaced) {
             seeds.push({ cx, cy, radius });
         }
@@ -734,29 +811,158 @@ function buildArchipelagoSeeds(rows: number, cols: number, rng: () => number): A
         [0.28, 0.72],
         [0.72, 0.3],
     ];
+
     for (const [nx, ny] of forcedPairs) {
         if (seeds.length >= Math.max(2, targetCount)) {
             break;
         }
+
         const radius = minDim * 0.19;
         const cx = nx * rows;
         const cy = ny * cols;
         let spaced = true;
+
         for (const existing of seeds) {
             const dx = cx - existing.cx;
             const dy = cy - existing.cy;
             const dist = Math.sqrt(dx * dx + dy * dy);
+
             if (dist < radius + existing.radius + minDim * 0.03) {
                 spaced = false;
                 break;
             }
         }
+
         if (spaced) {
             seeds.push({ cx, cy, radius });
         }
     }
 
     return seeds.slice(0, targetCount);
+}
+
+/**
+ * After noise + smoothing: open ocean stays deep_water, but cells touching land become
+ * water, with one extra ring of water before deep ocean. Shore land tiles can become beach
+ * (forests/swamps only sometimes, for variety).
+ */
+function applyArchipelagoCoastalLayers(
+    cells: string[][],
+    rows: number,
+    cols: number,
+    rng: () => number,
+): void {
+    const hasLandNeighbor4 = (x: number, y: number): boolean => {
+        for (const [dx, dy] of PASSABLE_DIRS) {
+            const nx = x + dx;
+            const ny = y + dy;
+
+            if (nx < 0 || nx >= rows || ny < 0 || ny >= cols) {
+                continue;
+            }
+
+            const t = cells[nx][ny];
+
+            if (!isOpenOceanTerrain(t)) {
+                return true;
+            }
+        }
+
+        return false;
+    };
+
+    const hasOpenOceanNeighbor4 = (x: number, y: number): boolean => {
+        for (const [dx, dy] of PASSABLE_DIRS) {
+            const nx = x + dx;
+            const ny = y + dy;
+
+            if (nx < 0 || nx >= rows || ny < 0 || ny >= cols) {
+                continue;
+            }
+
+            if (isOpenOceanTerrain(cells[nx][ny])) {
+                return true;
+            }
+        }
+
+        return false;
+    };
+
+    for (let x = 0; x < rows; x++) {
+        for (let y = 0; y < cols; y++) {
+            const t = cells[x][y];
+
+            if (!isOpenOceanTerrain(t)) {
+                continue;
+            }
+
+            if (hasLandNeighbor4(x, y)) {
+                cells[x][y] = 'water';
+            }
+        }
+    }
+
+    for (let pass = 0; pass < 2; pass++) {
+        const snap = cells.map((row) => [...row]);
+
+        for (let x = 0; x < rows; x++) {
+            for (let y = 0; y < cols; y++) {
+                if (snap[x][y] !== 'deep_water') {
+                    continue;
+                }
+
+                let touchesNormalWater = false;
+
+                for (const [dx, dy] of PASSABLE_DIRS) {
+                    const nx = x + dx;
+                    const ny = y + dy;
+
+                    if (nx < 0 || nx >= rows || ny < 0 || ny >= cols) {
+                        continue;
+                    }
+
+                    if (snap[nx][ny] === 'water') {
+                        touchesNormalWater = true;
+
+                        break;
+                    }
+                }
+
+                if (touchesNormalWater) {
+                    cells[x][y] = 'water';
+                }
+            }
+        }
+    }
+
+    for (let x = 0; x < rows; x++) {
+        for (let y = 0; y < cols; y++) {
+            const t = cells[x][y];
+
+            if (isOpenOceanTerrain(t) || t === 'river') {
+                continue;
+            }
+
+            if (t === 'mountain' || t === 'hill') {
+                continue;
+            }
+
+            if (!hasOpenOceanNeighbor4(x, y)) {
+                continue;
+            }
+
+            const preferBeach =
+                t === 'plains'
+                || t === 'meadow'
+                || t === 'desert'
+                || t === 'beach'
+                || ((t === 'forest' || t === 'dense_forest' || t === 'swamp') && rng() < 0.42);
+
+            if (preferBeach) {
+                cells[x][y] = 'beach';
+            }
+        }
+    }
 }
 
 /** Land mask from a few large seeded islands with irregular, non-circular coastlines. */
@@ -774,10 +980,12 @@ function islandLandFactor(
     let nearestDist = Infinity;
     let nearestDx = 0;
     let nearestDy = 0;
+
     for (const seed of seeds) {
         const dx = gx - seed.cx;
         const dy = gy - seed.cy;
         const dist = Math.sqrt(dx * dx + dy * dy);
+
         if (dist < nearestDist) {
             nearestDist = dist;
             nearest = seed;
@@ -816,9 +1024,11 @@ function islandLandFactor(
 /** Drop stray single-cell land specks left by noisy coastlines. */
 function pruneTinyLandIsles(cells: string[][], rows: number, cols: number, minSize: number): void {
     const land = new Set<string>();
+
     for (let x = 0; x < rows; x++) {
         for (let y = 0; y < cols; y++) {
             const t = cells[x][y];
+
             if (t !== 'water' && t !== 'deep_water') {
                 land.add(`${x},${y}`);
             }
@@ -826,17 +1036,21 @@ function pruneTinyLandIsles(cells: string[][], rows: number, cols: number, minSi
     }
 
     const seen = new Set<string>();
+
     for (const start of land) {
         if (seen.has(start)) {
             continue;
         }
+
         const component: string[] = [];
         const queue = [start];
         seen.add(start);
+
         while (queue.length > 0) {
             const key = queue.pop()!;
             component.push(key);
             const [x, y] = key.split(',').map(Number);
+
             for (const [dx, dy] of [
                 [1, 0],
                 [-1, 0],
@@ -844,12 +1058,14 @@ function pruneTinyLandIsles(cells: string[][], rows: number, cols: number, minSi
                 [0, -1],
             ] as GridCell[]) {
                 const next = `${x + dx},${y + dy}`;
+
                 if (land.has(next) && !seen.has(next)) {
                     seen.add(next);
                     queue.push(next);
                 }
             }
         }
+
         if (component.length < minSize) {
             for (const key of component) {
                 const [x, y] = key.split(',').map(Number);
@@ -888,10 +1104,13 @@ function paintRiverCell(cells: string[][], rows: number, cols: number, cx: numbe
     if (cx < 0 || cx >= rows || cy < 0 || cy >= cols) {
         return;
     }
+
     const here = cells[cx][cy];
+
     if (isOpenOceanTerrain(here)) {
         return;
     }
+
     if (!WATER_TERRAINS.has(here as TerrainId)) {
         cells[cx][cy] = 'river';
     }
@@ -911,6 +1130,7 @@ function stampThickRiver(
             if (Math.max(Math.abs(dx), Math.abs(dy)) > chebyshevRadius) {
                 continue;
             }
+
             paintRiverCell(cells, rows, cols, cx + dx, cy + dy);
         }
     }
@@ -935,6 +1155,7 @@ function carveDescendingRivers(
     const riverChebyshevRadius = 1;
 
     const candidates: GridCell[] = [];
+
     for (let x = 0; x < rows; x++) {
         for (let y = 0; y < cols; y++) {
             if (elev[x][y] >= minSourceElev && !WATER_TERRAINS.has(cells[x][y] as TerrainId)) {
@@ -942,6 +1163,7 @@ function carveDescendingRivers(
             }
         }
     }
+
     if (candidates.length === 0) {
         return;
     }
@@ -949,17 +1171,21 @@ function carveDescendingRivers(
     shufflePairs(candidates, rng);
 
     const sources: GridCell[] = [];
+
     for (const [sx, sy] of candidates) {
         if (sources.length >= riverCount) {
             break;
         }
+
         let spaced = true;
+
         for (const [ox, oy] of sources) {
             if (Math.abs(sx - ox) + Math.abs(sy - oy) < minSpacing) {
                 spaced = false;
                 break;
             }
         }
+
         if (spaced) {
             sources.push([sx, sy]);
         }
@@ -973,10 +1199,13 @@ function carveDescendingRivers(
             if (isOpenOceanTerrain(cells[x][y])) {
                 break;
             }
+
             const key = `${x},${y}`;
+
             if (seen.has(key)) {
                 break;
             }
+
             seen.add(key);
 
             stampThickRiver(cells, rows, cols, x, y, riverChebyshevRadius);
@@ -990,9 +1219,11 @@ function carveDescendingRivers(
             for (const [dx, dy] of DIR8) {
                 const nx = x + dx;
                 const ny = y + dy;
+
                 if (nx < 0 || nx >= rows || ny < 0 || ny >= cols) {
                     continue;
                 }
+
                 if (isOpenOceanTerrain(cells[nx][ny])) {
                     towardOcean = true;
                     nextX = nx;
@@ -1000,7 +1231,9 @@ function carveDescendingRivers(
                     nextEl = -1;
                     break;
                 }
+
                 const el = elev[nx][ny];
+
                 if (el < curEl && el < nextEl) {
                     nextEl = el;
                     nextX = nx;
@@ -1016,22 +1249,28 @@ function carveDescendingRivers(
                 let bx = -1;
                 let by = -1;
                 let be = Infinity;
+
                 for (const [dx, dy] of DIR8) {
                     const nx = x + dx;
                     const ny = y + dy;
+
                     if (nx < 0 || nx >= rows || ny < 0 || ny >= cols) {
                         continue;
                     }
+
                     const el = elev[nx][ny];
+
                     if (el < be) {
                         be = el;
                         bx = nx;
                         by = ny;
                     }
                 }
+
                 if (bx < 0) {
                     break;
                 }
+
                 x = bx;
                 y = by;
             } else {
@@ -1061,30 +1300,38 @@ function smoothGrid(grid: TerrainId[][], rows: number, cols: number, passes: num
 
     for (let p = 0; p < passes; p++) {
         const next = grid.map((row) => [...row]);
+
         for (let x = 0; x < rows; x++) {
             for (let y = 0; y < cols; y++) {
                 const cur = grid[x][y];
+
                 if (WATER_TERRAINS.has(cur)) {
                     next[x][y] = cur;
 
                     continue;
                 }
+
                 if (cur === 'mountain') {
                     let mn = 0;
                     let total = 0;
+
                     for (let dx = -1; dx <= 1; dx++) {
                         for (let dy = -1; dy <= 1; dy++) {
                             const nx = x + dx;
                             const ny = y + dy;
+
                             if (nx < 0 || nx >= rows || ny < 0 || ny >= cols) {
                                 continue;
                             }
+
                             total++;
+
                             if (grid[nx][ny] === 'mountain') {
                                 mn++;
                             }
                         }
                     }
+
                     if (mn < 3 && total >= 6) {
                         next[x][y] = 'hill';
                     } else {
@@ -1097,26 +1344,33 @@ function smoothGrid(grid: TerrainId[][], rows: number, cols: number, passes: num
                 for (const k of order) {
                     counts[k] = 0;
                 }
+
                 for (let dx = -1; dx <= 1; dx++) {
                     for (let dy = -1; dy <= 1; dy++) {
                         const nx = x + dx;
                         const ny = y + dy;
+
                         if (nx < 0 || nx >= rows || ny < 0 || ny >= cols) {
                             continue;
                         }
+
                         const t = grid[nx][ny];
                         counts[t] = (counts[t] ?? 0) + 1;
                     }
                 }
+
                 let best: TerrainId = cur;
                 let bestC = 0;
+
                 for (const k of order) {
                     const c = counts[k] ?? 0;
+
                     if (c > bestC) {
                         bestC = c;
                         best = k;
                     }
                 }
+
                 if (bestC >= 6 && !WATER_TERRAINS.has(best)) {
                     next[x][y] = best;
                 } else {
@@ -1124,6 +1378,7 @@ function smoothGrid(grid: TerrainId[][], rows: number, cols: number, passes: num
                 }
             }
         }
+
         for (let x = 0; x < rows; x++) {
             for (let y = 0; y < cols; y++) {
                 grid[x][y] = next[x][y];
@@ -1144,6 +1399,7 @@ export function generateRandomMap(options: MapGenerationOptions = {}): Generated
     if (!isAllowedMapGridSize(cellRows, cellCols)) {
         throw new RangeError(`Invalid map size ${cellRows}×${cellCols} for generation.`);
     }
+
     const s =
         options.seed === undefined || !Number.isFinite(options.seed)
             ? defaultSeed()
@@ -1153,7 +1409,6 @@ export function generateRandomMap(options: MapGenerationOptions = {}): Generated
     const rows = cellRows;
     const cols = cellCols;
     const cells: string[][] = [];
-    const bridges: boolean[][] = [];
     const elev: number[][] = [];
 
     /** Lower = slower noise variation across cells = larger biome patches. */
@@ -1174,8 +1429,8 @@ export function generateRandomMap(options: MapGenerationOptions = {}): Generated
 
     for (let x = 0; x < rows; x++) {
         cells[x] = [];
-        bridges[x] = [];
         elev[x] = [];
+
         for (let y = 0; y < cols; y++) {
             const wx = (x + 0.5) * scale + ox;
             const wy = (y + 0.5) * scale + oy;
@@ -1210,13 +1465,13 @@ export function generateRandomMap(options: MapGenerationOptions = {}): Generated
             moisture = Math.min(1, Math.max(0, moisture));
 
             elev[x][y] = elevation;
+
             if (profile.aridBiome) {
                 const oasis = oasisStrength(x, y, scale, oasisOx, oasisOy);
                 cells[x][y] = classifyDesert(elevation, moisture, oasis);
             } else {
                 cells[x][y] = classify(elevation, moisture);
             }
-            bridges[x][y] = false;
         }
     }
 
@@ -1245,15 +1500,23 @@ export function generateRandomMap(options: MapGenerationOptions = {}): Generated
         smoothGrid(cells as TerrainId[][], rows, cols, 1);
     }
 
+    if (profile.islandMask) {
+        applyArchipelagoCoastalLayers(cells, rows, cols, rng);
+    }
+
     if (profile.mountainBiome) {
         ensureMountainAccessibility(cells, elev, rows, cols);
     }
 
+    const markerRng = mulberry32((s ^ 0xca501abe) >>> 0);
+    const { teamCount, markers } = buildMarkersForGeneratedTerrain(cells, rows, cols, markerRng);
+
     return {
-        version: 1,
+        version: 2,
         cellRows: rows,
         cellCols: cols,
         cells,
-        bridges,
+        teamCount,
+        markers,
     };
 }

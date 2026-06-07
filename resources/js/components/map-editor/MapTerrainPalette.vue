@@ -1,4 +1,5 @@
 <script setup lang="ts">
+/* eslint-disable vue/no-mutating-props -- editor exposes mutable refs shared by map builder */
 import type { MapEditorInstance } from '@/composables/useMapEditor';
 import type { TerrainId } from '@/lib/terrainCatalog';
 import { cn } from '@/lib/utils';
@@ -19,8 +20,14 @@ function selectTerrain(id: string): void {
     if (!props.terrainTypes.some((t) => t.id === id)) {
         return;
     }
+
     props.editor.selectedTerrain.value = id as TerrainId;
-    if (props.editor.activeTool.value === 'pan') {
+
+    if (
+        props.editor.activeTool.value === 'pan'
+        || props.editor.activeTool.value === 'capital'
+        || props.editor.activeTool.value === 'flag'
+    ) {
         props.editor.activeTool.value = 'brush';
     }
 }

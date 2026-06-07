@@ -38,7 +38,9 @@ final class MapEditorGrid
     }
 
     /**
-     * @return array{version: int, cellRows: int, cellCols: int, cells: list<list<string>>, bridges: list<list<bool>>}
+     * Empty v2 plains grid with {@see GameConstants::MIN_PLAYERS} teams and no markers (user places capitals).
+     *
+     * @return array{version: int, cellRows: int, cellCols: int, cells: list<list<string>>, teamCount: int, markers: list<array{type: string, team: int, row: int, col: int}>}
      */
     public static function emptyData(?int $cellRows = null, ?int $cellCols = null): array
     {
@@ -49,19 +51,18 @@ final class MapEditorGrid
         }
 
         $cells = [];
-        $bridges = [];
 
         for ($r = 0; $r < $rows; $r++) {
             $cells[$r] = array_fill(0, $cols, 'plains');
-            $bridges[$r] = array_fill(0, $cols, false);
         }
 
         return [
-            'version' => 1,
+            'version' => 2,
             'cellRows' => $rows,
             'cellCols' => $cols,
             'cells' => $cells,
-            'bridges' => $bridges,
+            'teamCount' => GameConstants::MIN_PLAYERS,
+            'markers' => [],
         ];
     }
 }

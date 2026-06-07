@@ -1,36 +1,39 @@
-import { router } from '@inertiajs/vue3';
-import { computed, ref, shallowRef } from 'vue';
-import {
-    generateRandomMap,
-    type GeneratedMapData,
-    type MapGenerationType,
-} from '@/lib/generateRandomMap';
+import { computed, ref, shallowRef, watch } from 'vue';
+import { generateRandomMap } from '@/lib/generateRandomMap';
+import type { GeneratedMapData, MapGenerationType } from '@/lib/generateRandomMap';
 import {
     MAP_EDITOR_CELL_PX,
+    MAP_MAX_TEAMS,
+    MAP_MIN_TEAMS,
     emptyMapPayload,
     isAllowedMapGridSize,
+    normalizeMapPayload,
     validateMapGridData,
+    validateMapMarkers,
 } from '@/lib/mapEditorGrid';
+import type { MapDataPayload, MapMarker } from '@/lib/mapEditorGrid';
+import { computeMinSeparationForMapState, manhattanDistance } from '@/lib/mapMarkerSpacing';
+import { isFarEnoughFromHydraulicWaterForMapMarker, isPlaceableTerrain } from '@/lib/mapMarkers';
 import type { TerrainId } from '@/lib/terrainCatalog';
-import { destroy as destroyMap, show, store, update } from '@/routes/maps';
+import mapsRoutes, { destroy as destroyMap, show, store, update } from '@/routes/maps';
 
-export type MapEditorTool = 'brush' | 'eraser' | 'fill' | 'pan';
+export type MapEditorTool = 'brush' | 'eraser' | 'fill' | 'pan' | 'capital' | 'flag';
 
-export type MapDataPayload = {
-    version: number;
-    cellRows: number;
-    cellCols: number;
-    cells: string[][];
-    bridges: boolean[][];
-};
+export type { MapDataPayload, MapMarker } from '@/lib/mapEditorGrid';
 
 function cloneCells(cells: string[][]): string[][] {
     return cells.map((row) => [...row]);
 }
 
-function emptyBridges(cellRows: number, cellCols: number): boolean[][] {
-    return Array.from({ length: cellRows }, () => Array.from({ length: cellCols }, () => false));
+function cloneMarkerList(markers: MapMarker[]): MapMarker[] {
+    return markers.map((m) => ({ ...m }));
 }
+
+type EditorSnapshot = {
+    cells: string[][];
+    markers: MapMarker[];
+    teamCount: number;
+};
 
 const MAX_UNDO = 50;
 
@@ -82,8 +85,35 @@ async function jsonFetch(
     });
 }
 
+/** Row shape returned by {@see MapController::index} for the map-builder sidebar. */
+export type MapListSummary = {
+    id: number;
+    uuid: string;
+    name: string;
+    updated_at: string | null;
+};
+
+async function fetchMapsSummaries(): Promise<MapListSummary[] | null> {
+    const res = await jsonFetch(mapsRoutes.index.url());
+
+    if (!res.ok) {
+        return null;
+    }
+
+    const body = (await res.json()) as { maps: MapListSummary[] };
+
+    return body.maps;
+}
+
 export function useMapEditor(initialDefaults: MapDataPayload) {
-    const cells = ref<string[][]>(cloneCells(initialDefaults.cells));
+    const initialNormalized = normalizeMapPayload(initialDefaults);
+
+    const cells = ref<string[][]>(cloneCells(initialNormalized.cells));
+    const teamCount = ref(initialNormalized.teamCount ?? MAP_MIN_TEAMS);
+    const markers = ref<MapMarker[]>(cloneMarkerList(initialNormalized.markers ?? []));
+    /** `null` when painting terrain so the team strip does not look “armed” for markers. */
+    const selectedTeam = ref<number | null>(null);
+
     const mapName = ref('Untitled map');
     const currentUuid = shallowRef<string | null>(null);
     const dirty = ref(false);
@@ -97,9 +127,37 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
     const mapViewNonce = ref(0);
     /** Bumped when terrain changes so the editor can repaint without deep-watching cells. */
     const terrainEpoch = ref(0);
+    /** Bumped when markers or team count change. */
+    const markersEpoch = ref(0);
 
-    const undoStack = ref<{ cells: string[][] }[]>([]);
-    const redoStack = ref<{ cells: string[][] }[]>([]);
+    function clampSelectedTeamToTeamCount(): void {
+        if (selectedTeam.value === null) {
+            return;
+        }
+
+        selectedTeam.value = Math.min(selectedTeam.value, teamCount.value - 1);
+    }
+
+    watch(activeTool, (tool) => {
+        if (tool === 'capital' || tool === 'flag') {
+            if (selectedTeam.value === null) {
+                selectedTeam.value = 0;
+            }
+
+            return;
+        }
+
+        if (tool === 'brush' || tool === 'eraser' || tool === 'fill') {
+            selectedTeam.value = null;
+        }
+    });
+
+    watch(selectedTerrain, () => {
+        selectedTeam.value = null;
+    });
+
+    const undoStack = ref<EditorSnapshot[]>([]);
+    const redoStack = ref<EditorSnapshot[]>([]);
 
     const strokeOpen = ref(false);
 
@@ -131,51 +189,105 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         terrainEpoch.value += 1;
     }
 
+    function bumpMarkersRender(): void {
+        markersEpoch.value += 1;
+    }
+
     function snapshot(): void {
         undoStack.value.push({
             cells: cloneCells(cells.value),
+            markers: cloneMarkerList(markers.value),
+            teamCount: teamCount.value,
         });
+
         if (undoStack.value.length > MAX_UNDO) {
             undoStack.value.shift();
         }
+
         redoStack.value = [];
+    }
+
+    function pruneMarkersOnInvalidTerrain(): void {
+        const next = markers.value.filter((m) => {
+            const t = cells.value[m.row]?.[m.col];
+
+            if (typeof t !== 'string' || !isPlaceableTerrain(t)) {
+                return false;
+            }
+
+            if (m.type === 'capital' || m.type === 'flag') {
+                return isFarEnoughFromHydraulicWaterForMapMarker(
+                    cells.value,
+                    gridRows.value,
+                    gridCols.value,
+                    m.row,
+                    m.col,
+                );
+            }
+
+            return true;
+        });
+
+        if (next.length !== markers.value.length) {
+            markers.value = next;
+            bumpMarkersRender();
+        }
     }
 
     function undo(): void {
         const prev = undoStack.value.pop();
+
         if (!prev) {
             return;
         }
+
         redoStack.value.push({
             cells: cloneCells(cells.value),
+            markers: cloneMarkerList(markers.value),
+            teamCount: teamCount.value,
         });
         cells.value = prev.cells;
+        markers.value = cloneMarkerList(prev.markers);
+        teamCount.value = prev.teamCount;
+        clampSelectedTeamToTeamCount();
         dirty.value = true;
         bumpTerrainRender();
+        bumpMarkersRender();
     }
 
     function redo(): void {
         const next = redoStack.value.pop();
+
         if (!next) {
             return;
         }
+
         undoStack.value.push({
             cells: cloneCells(cells.value),
+            markers: cloneMarkerList(markers.value),
+            teamCount: teamCount.value,
         });
         cells.value = next.cells;
+        markers.value = cloneMarkerList(next.markers);
+        teamCount.value = next.teamCount;
+        clampSelectedTeamToTeamCount();
         dirty.value = true;
         bumpTerrainRender();
+        bumpMarkersRender();
     }
 
     function stampDisc(gx: number, gy: number, paint: (x: number, y: number) => void): void {
         const r = brushRadius.value;
+
         for (let dy = -r; dy <= r; dy++) {
             for (let dx = -r; dx <= r; dx++) {
                 if (dx * dx + dy * dy > r * r + 0.5) {
                     continue;
                 }
+
                 const x = gx + dx;
                 const y = gy + dy;
+
                 if (x >= 0 && x < gridRows.value && y >= 0 && y < gridCols.value) {
                     paint(x, y);
                 }
@@ -192,18 +304,29 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
     function stampEraserOnly(gx: number, gy: number): void {
         stampDisc(gx, gy, (x, y) => {
             cells.value[x][y] = 'plains';
+            markers.value = markers.value.filter((m) => !(m.row === x && m.col === y));
         });
     }
 
     function beginStroke(): void {
-        if (activeTool.value === 'fill' || activeTool.value === 'pan') {
+        if (
+            activeTool.value === 'fill'
+            || activeTool.value === 'pan'
+            || activeTool.value === 'capital'
+            || activeTool.value === 'flag'
+        ) {
             return;
         }
+
         snapshot();
         strokeOpen.value = true;
     }
 
     function endStroke(): void {
+        if (strokeOpen.value && (activeTool.value === 'brush' || activeTool.value === 'eraser')) {
+            pruneMarkersOnInvalidTerrain();
+        }
+
         strokeOpen.value = false;
     }
 
@@ -211,6 +334,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         if (!strokeOpen.value) {
             return;
         }
+
         if (activeTool.value === 'brush') {
             stampBrushOnly(gx, gy);
             dirty.value = true;
@@ -219,14 +343,17 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
             stampEraserOnly(gx, gy);
             dirty.value = true;
             bumpTerrainRender();
+            bumpMarkersRender();
         }
     }
 
     function applyFill(gx: number, gy: number): void {
         const target = cells.value[gx][gy];
+
         if (target === selectedTerrain.value) {
             return;
         }
+
         snapshot();
         const visited = new Set<string>();
         const queue: [number, number][] = [[gx, gy]];
@@ -234,19 +361,25 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         while (queue.length > 0) {
             const [x, y] = queue.pop()!;
             const key = `${x},${y}`;
+
             if (visited.has(key)) {
                 continue;
             }
+
             if (x < 0 || x >= gridRows.value || y < 0 || y >= gridCols.value) {
                 continue;
             }
+
             if (cells.value[x][y] !== target) {
                 continue;
             }
+
             visited.add(key);
             cells.value[x][y] = selectedTerrain.value;
             queue.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
         }
+
+        pruneMarkersOnInvalidTerrain();
         dirty.value = true;
         bumpTerrainRender();
     }
@@ -257,14 +390,118 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         }
     }
 
+    function placeCapitalAt(gx: number, gy: number): void {
+        const t = cells.value[gx]?.[gy];
+
+        if (typeof t !== 'string' || !isPlaceableTerrain(t)) {
+            return;
+        }
+
+        if (
+            !isFarEnoughFromHydraulicWaterForMapMarker(
+                cells.value,
+                gridRows.value,
+                gridCols.value,
+                gx,
+                gy,
+            )
+        ) {
+            return;
+        }
+
+        snapshot();
+        const team = selectedTeam.value ?? 0;
+        markers.value = markers.value.filter(
+            (m) => !(m.team === team && m.type === 'capital') && !(m.row === gx && m.col === gy),
+        );
+        markers.value = [...markers.value, { type: 'capital', team, row: gx, col: gy }];
+        dirty.value = true;
+        bumpMarkersRender();
+    }
+
+    function placeFlagAt(gx: number, gy: number): void {
+        const t = cells.value[gx]?.[gy];
+
+        if (typeof t !== 'string' || !isPlaceableTerrain(t)) {
+            return;
+        }
+
+        if (
+            !isFarEnoughFromHydraulicWaterForMapMarker(
+                cells.value,
+                gridRows.value,
+                gridCols.value,
+                gx,
+                gy,
+            )
+        ) {
+            return;
+        }
+
+        if (markers.value.some((m) => m.row === gx && m.col === gy)) {
+            return;
+        }
+
+        const capitalPositions = markers.value
+            .filter((m) => m.type === 'capital')
+            .map((m) => ({ row: m.row, col: m.col }));
+        const flagCount = markers.value.filter((m) => m.type === 'flag').length;
+        const flagBudget = Math.max(flagCount + 1, teamCount.value * 2, 1);
+        const sep = computeMinSeparationForMapState({
+            cells: cells.value,
+            rows: gridRows.value,
+            cols: gridCols.value,
+            teamCount: teamCount.value,
+            capitalPositions,
+            flagBudget,
+        });
+
+        for (const m of markers.value) {
+            if (m.type !== 'capital' && m.type !== 'flag') {
+                continue;
+            }
+
+            if (manhattanDistance({ row: gx, col: gy }, { row: m.row, col: m.col }) < sep) {
+                return;
+            }
+        }
+
+        snapshot();
+        markers.value = [
+            ...markers.value,
+            { type: 'flag', team: selectedTeam.value ?? 0, row: gx, col: gy },
+        ];
+        dirty.value = true;
+        bumpMarkersRender();
+    }
+
+    function placementClick(gx: number, gy: number): void {
+        if (activeTool.value === 'capital') {
+            placeCapitalAt(gx, gy);
+        } else if (activeTool.value === 'flag') {
+            placeFlagAt(gx, gy);
+        }
+    }
+
+    function resetDocumentFromPayload(payload: MapDataPayload): void {
+        const n = normalizeMapPayload(payload);
+        cells.value = cloneCells(n.cells);
+        teamCount.value = n.teamCount ?? MAP_MIN_TEAMS;
+        markers.value = cloneMarkerList(n.markers ?? []);
+        selectedTeam.value = null;
+    }
+
     function newMap(): void {
-        cells.value = cloneCells(initialDefaults.cells);
+        resetDocumentFromPayload(initialDefaults);
+        teamCount.value = MAP_MIN_TEAMS;
+        selectedTeam.value = null;
         mapName.value = 'Untitled map';
         currentUuid.value = null;
         dirty.value = false;
         undoStack.value = [];
         redoStack.value = [];
         bumpTerrainRender();
+        bumpMarkersRender();
         requestMapViewFit();
     }
 
@@ -272,14 +509,19 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         if (!isAllowedMapGridSize(cellRows, cellCols)) {
             return;
         }
+
         const payload = emptyMapPayload(cellRows, cellCols);
         cells.value = cloneCells(payload.cells);
+        teamCount.value = MAP_MIN_TEAMS;
+        markers.value = cloneMarkerList(payload.markers ?? []);
+        selectedTeam.value = null;
         mapName.value = 'Untitled map';
         currentUuid.value = null;
         dirty.value = false;
         undoStack.value = [];
         redoStack.value = [];
         bumpTerrainRender();
+        bumpMarkersRender();
         requestMapViewFit();
     }
 
@@ -289,26 +531,33 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
                 cellRows: payload.cellRows,
                 cellCols: payload.cellCols,
                 cells: payload.cells,
-                bridges: payload.bridges,
             })
         ) {
             return;
         }
-        cells.value = cloneCells(payload.cells);
+
+        const n = normalizeMapPayload(payload);
+        cells.value = cloneCells(n.cells);
+        teamCount.value = n.teamCount ?? MAP_MIN_TEAMS;
+        markers.value = cloneMarkerList(n.markers ?? []);
+        selectedTeam.value = null;
         mapName.value = name;
         currentUuid.value = uuid;
         dirty.value = false;
         undoStack.value = [];
         redoStack.value = [];
         bumpTerrainRender();
+        bumpMarkersRender();
         requestMapViewFit();
     }
 
     async function loadMap(uuid: string): Promise<void> {
         const res = await jsonFetch(show.url(uuid));
+
         if (!res.ok) {
             throw new Error('Failed to load map');
         }
+
         const body = (await res.json()) as {
             map: { name: string; uuid: string; data: MapDataPayload };
         };
@@ -320,16 +569,23 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         const cols = gridCols.value;
 
         return {
-            version: 1,
+            version: 2,
             cellRows: rows,
             cellCols: cols,
             cells: cloneCells(cells.value),
-            bridges: emptyBridges(rows, cols),
+            teamCount: teamCount.value,
+            markers: cloneMarkerList(markers.value),
         };
     }
 
-    async function saveMap(): Promise<void> {
+    async function saveMap(): Promise<MapListSummary[] | null> {
         const data = getDataPayload();
+        const markerErrors = validateMapMarkers(data);
+
+        if (markerErrors.length > 0) {
+            throw new Error(markerErrors.join('\n'));
+        }
+
         const name = mapName.value.trim() || 'Untitled map';
 
         if (currentUuid.value) {
@@ -341,6 +597,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
                 },
                 body: JSON.stringify({ name, data }),
             });
+
             if (!res.ok) {
                 throw new Error('Save failed');
             }
@@ -353,30 +610,37 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
                 },
                 body: JSON.stringify({ name, data }),
             });
+
             if (!res.ok) {
                 throw new Error('Create failed');
             }
+
             const body = (await res.json()) as { map: { uuid: string } };
             currentUuid.value = body.map.uuid;
         }
+
         dirty.value = false;
-        router.reload({ only: ['maps'] });
+
+        return fetchMapsSummaries();
     }
 
-    async function deleteMap(uuid: string): Promise<void> {
+    async function deleteMap(uuid: string): Promise<MapListSummary[] | null> {
         const res = await jsonFetch(destroyMap.url(uuid), {
             method: 'DELETE',
             headers: {
                 'X-CSRF-TOKEN': csrfToken(),
             },
         });
+
         if (!res.ok) {
             throw new Error('Delete failed');
         }
+
         if (currentUuid.value === uuid) {
             newMap();
         }
-        router.reload({ only: ['maps'] });
+
+        return fetchMapsSummaries();
     }
 
     function applyGeneratedMap(payload: MapDataPayload | GeneratedMapData): void {
@@ -385,15 +649,30 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
                 cellRows: payload.cellRows,
                 cellCols: payload.cellCols,
                 cells: payload.cells,
-                bridges: payload.bridges,
             })
         ) {
             return;
         }
+
         snapshot();
         cells.value = cloneCells(payload.cells);
+
+        if (
+            payload.version >= 2
+            && typeof payload.teamCount === 'number'
+            && Array.isArray(payload.markers)
+        ) {
+            teamCount.value = payload.teamCount;
+            markers.value = cloneMarkerList(payload.markers);
+        } else {
+            teamCount.value = MAP_MIN_TEAMS;
+            markers.value = [];
+        }
+
+        selectedTeam.value = null;
         dirty.value = true;
         bumpTerrainRender();
+        bumpMarkersRender();
         requestMapViewFit();
     }
 
@@ -406,6 +685,57 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
                 cellCols: gridCols.value,
             }),
         );
+    }
+
+    function setTeamCount(next: number): void {
+        let n = Math.round(next);
+
+        if (!Number.isFinite(n)) {
+            return;
+        }
+
+        n = Math.max(MAP_MIN_TEAMS, Math.min(MAP_MAX_TEAMS, n));
+
+        if (n === teamCount.value) {
+            return;
+        }
+
+        snapshot();
+        teamCount.value = n;
+        markers.value = markers.value.filter((m) => m.team < n);
+        clampSelectedTeamToTeamCount();
+        dirty.value = true;
+        bumpMarkersRender();
+    }
+
+    /**
+     * Removes one team slot: deletes that team's markers and decrements {@link teamCount},
+     * remapping higher team indices down by one (so colour slots stay contiguous).
+     */
+    function removeTeamAtSlot(slot: number): void {
+        if (teamCount.value <= MAP_MIN_TEAMS) {
+            return;
+        }
+
+        if (slot < 0 || slot >= teamCount.value || !Number.isInteger(slot)) {
+            return;
+        }
+
+        snapshot();
+        markers.value = markers.value
+            .filter((m) => m.team !== slot)
+            .map((m) => (m.team > slot ? { ...m, team: m.team - 1 } : m));
+        teamCount.value -= 1;
+
+        if (selectedTeam.value === slot) {
+            selectedTeam.value = null;
+        } else if (selectedTeam.value !== null && selectedTeam.value > slot) {
+            selectedTeam.value = selectedTeam.value - 1;
+        }
+
+        clampSelectedTeamToTeamCount();
+        dirty.value = true;
+        bumpMarkersRender();
     }
 
     function setBrushRadius(size: MapEditorBrushSize): void {
@@ -424,6 +754,9 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
 
     return {
         cells,
+        teamCount,
+        markers,
+        selectedTeam,
         mapName,
         currentUuid,
         dirty,
@@ -435,6 +768,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         camY,
         mapViewNonce,
         terrainEpoch,
+        markersEpoch,
         cellSize,
         gridRows,
         gridCols,
@@ -450,6 +784,9 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         endStroke,
         strokePaint,
         clickTool,
+        placementClick,
+        setTeamCount,
+        removeTeamAtSlot,
         newMap,
         newMapWithSize,
         loadMap,

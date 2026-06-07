@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Maps;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Maps\SaveMapRequest;
 use App\Maps\MapEditorGrid;
+use App\Maps\MapMarkers;
 use App\Maps\TerrainCatalog;
 use App\Models\Map;
 use Illuminate\Http\JsonResponse;
@@ -25,6 +26,7 @@ class MapController extends Controller
         return Inertia::render('MapBuilder', [
             'maps' => $maps,
             'terrainTypes' => TerrainCatalog::forClient(),
+            'teamColors' => MapMarkers::teamColorsForClient(),
             'defaults' => MapEditorGrid::emptyData(),
         ]);
     }

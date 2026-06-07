@@ -1,3 +1,7 @@
+import { computeMinSeparationForMapState, manhattanDistance } from '@/lib/mapMarkerSpacing';
+import { isFarEnoughFromHydraulicWaterForMapMarker, isPlaceableTerrain } from '@/lib/mapMarkers';
+import { isTerrainId } from '@/lib/terrainCatalog';
+
 /** Live battlefield vertex grid (App\Games\GameConstants rows+1 / cols+1). */
 export const LIVE_BATTLEFIELD_CELL_ROWS = 65;
 
@@ -24,8 +28,108 @@ export const MAP_GRID_MIN_CELL_COLS = 4;
 
 export const MAP_GRID_MAX_CELL_COLS = 256;
 
+/** Matches App\Games\GameConstants::MIN_PLAYERS / MAX_PLAYERS for map team count. */
+export const MAP_MIN_TEAMS = 2;
+
+export const MAP_MAX_TEAMS = 6;
+
+const FACTION_LABELS = ['red', 'blue', 'orange', 'purple', 'green', 'cyan'] as const;
+
+const ORTHO_DIRS: ReadonlyArray<readonly [number, number]> = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+];
+
+/**
+ * Matches random-map passability: units cannot occupy mountains but may traverse other terrains
+ * (including water) orthogonally.
+ */
+function isPassableTerrainForMapAccessibility(terrain: string): boolean {
+    return terrain !== 'mountain';
+}
+
+/**
+ * BFS from the first site: every marker cell must be reachable using orthogonal moves without
+ * crossing mountain cells.
+ */
+function allMarkerSitesMutuallyAccessible(
+    cells: string[][],
+    rows: number,
+    cols: number,
+    sites: ReadonlyArray<{ row: number; col: number }>,
+): boolean {
+    if (sites.length === 0) {
+        return true;
+    }
+
+    const start = sites[0]!;
+    const terrainStart = cells[start.row]?.[start.col];
+
+    if (typeof terrainStart !== 'string' || !isPassableTerrainForMapAccessibility(terrainStart)) {
+        return false;
+    }
+
+    const visited = new Set<string>();
+    const queue: { row: number; col: number }[] = [{ row: start.row, col: start.col }];
+    visited.add(`${start.row},${start.col}`);
+
+    while (queue.length > 0) {
+        const c = queue.shift()!;
+
+        for (const [dx, dy] of ORTHO_DIRS) {
+            const r = c.row + dx;
+            const col = c.col + dy;
+
+            if (r < 0 || r >= rows || col < 0 || col >= cols) {
+                continue;
+            }
+
+            const t = cells[r]?.[col];
+
+            if (typeof t !== 'string' || !isPassableTerrainForMapAccessibility(t)) {
+                continue;
+            }
+
+            const k = `${r},${col}`;
+
+            if (visited.has(k)) {
+                continue;
+            }
+
+            visited.add(k);
+            queue.push({ row: r, col });
+        }
+    }
+
+    for (const s of sites) {
+        if (!visited.has(`${s.row},${s.col}`)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 /** Editor canvas cell size in CSS px (3× the in-game cell size of 20px for a larger editing view). */
 export const MAP_EDITOR_CELL_PX = 60;
+
+export type MapMarker = {
+    type: 'capital' | 'flag';
+    team: number;
+    row: number;
+    col: number;
+};
+
+export type MapDataPayload = {
+    version: number;
+    cellRows: number;
+    cellCols: number;
+    cells: string[][];
+    teamCount?: number;
+    markers?: MapMarker[];
+};
 
 export function isAllowedMapGridSize(cellRows: number, cellCols: number): boolean {
     return (
@@ -38,26 +142,28 @@ export function isAllowedMapGridSize(cellRows: number, cellCols: number): boolea
     );
 }
 
-/** True when declared dimensions match rectangular `cells` and `bridges`. */
+/** True when declared dimensions match rectangular `cells`. */
 export function validateMapGridData(data: {
     cellRows: number;
     cellCols: number;
     cells: string[][];
-    bridges: boolean[][];
 }): boolean {
     if (!isAllowedMapGridSize(data.cellRows, data.cellCols)) {
         return false;
     }
-    if (data.cells.length !== data.cellRows || data.bridges.length !== data.cellRows) {
+
+    if (data.cells.length !== data.cellRows) {
         return false;
     }
+
     for (let r = 0; r < data.cellRows; r++) {
         const rowC = data.cells[r];
-        const rowB = data.bridges[r];
-        if (!Array.isArray(rowC) || !Array.isArray(rowB)) {
+
+        if (!Array.isArray(rowC)) {
             return false;
         }
-        if (rowC.length !== data.cellCols || rowB.length !== data.cellCols) {
+
+        if (rowC.length !== data.cellCols) {
             return false;
         }
     }
@@ -65,16 +171,44 @@ export function validateMapGridData(data: {
     return true;
 }
 
-export type EmptyMapPayload = {
-    version: number;
-    cellRows: number;
-    cellCols: number;
-    cells: string[][];
-    bridges: boolean[][];
-};
+function cloneMarker(m: MapMarker): MapMarker {
+    return { type: m.type, team: m.team, row: m.row, col: m.col };
+}
 
 /**
- * Empty plains map with the given vertex dimensions (must pass {@link isAllowedMapGridSize}).
+ * Upgrade v1 terrain-only payloads for the editor (v2 in memory).
+ */
+export function normalizeMapPayload(raw: MapDataPayload): MapDataPayload {
+    const v = raw.version ?? 1;
+
+    if (v === 1) {
+        return {
+            version: 2,
+            cellRows: raw.cellRows,
+            cellCols: raw.cellCols,
+            cells: raw.cells,
+            teamCount: MAP_MIN_TEAMS,
+            markers: [],
+        };
+    }
+
+    return {
+        version: 2,
+        cellRows: raw.cellRows,
+        cellCols: raw.cellCols,
+        cells: raw.cells,
+        teamCount:
+            typeof raw.teamCount === 'number' && Number.isInteger(raw.teamCount)
+                ? raw.teamCount
+                : MAP_MIN_TEAMS,
+        markers: Array.isArray(raw.markers) ? raw.markers.map(cloneMarker) : [],
+    };
+}
+
+export type EmptyMapPayload = MapDataPayload;
+
+/**
+ * Empty plains map (matches MapEditorGrid::emptyData()). Capitals are placed by the user.
  */
 export function emptyMapPayload(cellRows: number, cellCols: number): EmptyMapPayload {
     if (!isAllowedMapGridSize(cellRows, cellCols)) {
@@ -82,18 +216,202 @@ export function emptyMapPayload(cellRows: number, cellCols: number): EmptyMapPay
             `Map size ${cellRows}×${cellCols} is not allowed (${MAP_GRID_MIN_CELL_ROWS}–${MAP_GRID_MAX_CELL_ROWS} rows, ${MAP_GRID_MIN_CELL_COLS}–${MAP_GRID_MAX_CELL_COLS} cols).`,
         );
     }
+
     const cells: string[][] = [];
-    const bridges: boolean[][] = [];
+
     for (let x = 0; x < cellRows; x++) {
         cells[x] = Array.from({ length: cellCols }, () => 'plains');
-        bridges[x] = Array.from({ length: cellCols }, () => false);
     }
 
     return {
-        version: 1,
+        version: 2,
         cellRows,
         cellCols,
         cells,
-        bridges,
+        teamCount: MAP_MIN_TEAMS,
+        markers: [],
     };
+}
+
+/**
+ * Client-side marker validation (mirrors App\Maps\MapMarkers::validate).
+ */
+export function validateMapMarkers(data: MapDataPayload): string[] {
+    const errors: string[] = [];
+    const teamCount = data.teamCount ?? MAP_MIN_TEAMS;
+
+    if (!Number.isInteger(teamCount) || teamCount < MAP_MIN_TEAMS || teamCount > MAP_MAX_TEAMS) {
+        errors.push(`teamCount must be between ${MAP_MIN_TEAMS} and ${MAP_MAX_TEAMS}.`);
+
+        return errors;
+    }
+
+    const markers = data.markers ?? [];
+
+    if (!Array.isArray(markers)) {
+        errors.push('markers must be an array.');
+
+        return errors;
+    }
+
+    const cellRows = data.cellRows;
+    const cellCols = data.cellCols;
+    const cells = data.cells;
+    const occupied = new Set<string>();
+    const capitalsByTeam = new Map<number, true>();
+    const capitalPositions: { row: number; col: number }[] = [];
+    const validFlagPositions: { index: number; row: number; col: number }[] = [];
+    const flagCounts = new Array(teamCount).fill(0);
+
+    for (let index = 0; index < markers.length; index++) {
+        const marker = markers[index];
+
+        if (!marker || typeof marker !== 'object') {
+            errors.push(`markers[${index}] must be an object.`);
+
+            continue;
+        }
+
+        const { type, team, row, col } = marker;
+
+        if (type !== 'capital' && type !== 'flag') {
+            errors.push(`markers[${index}].type must be "capital" or "flag".`);
+
+            continue;
+        }
+
+        if (!Number.isInteger(team) || team < 0 || team >= MAP_MAX_TEAMS) {
+            errors.push(`markers[${index}].team must be between 0 and ${MAP_MAX_TEAMS - 1}.`);
+
+            continue;
+        }
+
+        if (team >= teamCount) {
+            errors.push(`markers[${index}].team must be less than teamCount (${teamCount}).`);
+
+            continue;
+        }
+
+        if (!Number.isInteger(row) || !Number.isInteger(col)) {
+            errors.push(`markers[${index}].row and col must be integers.`);
+
+            continue;
+        }
+
+        if (row < 0 || row >= cellRows || col < 0 || col >= cellCols) {
+            errors.push(`markers[${index}] is out of bounds for the terrain grid.`);
+
+            continue;
+        }
+
+        const key = `${row},${col}`;
+
+        if (occupied.has(key)) {
+            errors.push('Only one marker is allowed per cell.');
+
+            continue;
+        }
+
+        occupied.add(key);
+
+        const terrain = cells[row]?.[col];
+
+        if (typeof terrain !== 'string' || !isTerrainId(terrain)) {
+            errors.push(`markers[${index}] sits on invalid terrain.`);
+
+            continue;
+        }
+
+        if (!isPlaceableTerrain(terrain)) {
+            errors.push(`markers[${index}] cannot be placed on ${terrain}.`);
+
+            continue;
+        }
+
+        if (
+            (type === 'capital' || type === 'flag') &&
+            !isFarEnoughFromHydraulicWaterForMapMarker(cells, cellRows, cellCols, row, col)
+        ) {
+            errors.push(`markers[${index}] is too close to water or a river.`);
+
+            continue;
+        }
+
+        if (type === 'capital') {
+            if (capitalsByTeam.has(team)) {
+                errors.push(`Team ${team} has more than one capital.`);
+
+                continue;
+            }
+
+            capitalsByTeam.set(team, true);
+            capitalPositions.push({ row, col });
+        } else if (type === 'flag') {
+            validFlagPositions.push({ index, row, col });
+            flagCounts[team] += 1;
+        }
+    }
+
+    const flagBudget = Math.max(validFlagPositions.length, teamCount * 2, 1);
+    const sep = computeMinSeparationForMapState({
+        cells,
+        rows: cellRows,
+        cols: cellCols,
+        teamCount,
+        capitalPositions,
+        flagBudget,
+    });
+
+    for (let i = 0; i < validFlagPositions.length; i++) {
+        const a = validFlagPositions[i]!;
+
+        for (const cap of capitalPositions) {
+            if (manhattanDistance({ row: a.row, col: a.col }, cap) < sep) {
+                errors.push(`markers[${a.index}] is too close to a capital.`);
+            }
+        }
+
+        for (let j = i + 1; j < validFlagPositions.length; j++) {
+            const b = validFlagPositions[j]!;
+
+            if (manhattanDistance({ row: a.row, col: a.col }, { row: b.row, col: b.col }) < sep) {
+                errors.push(`markers[${a.index}] is too close to another flag.`);
+            }
+        }
+    }
+
+    const minFlags = Math.min(...flagCounts);
+    const maxFlags = Math.max(...flagCounts);
+
+    if (minFlags !== maxFlags) {
+        const parts = flagCounts.map((n, t) => `${FACTION_LABELS[t] ?? `team ${t}`}: ${n}`).join(', ');
+        errors.push(`Each team must have the same number of flags (current counts: ${parts}).`);
+    }
+
+    const missing: string[] = [];
+
+    for (let t = 0; t < teamCount; t++) {
+        if (!capitalsByTeam.has(t)) {
+            missing.push(FACTION_LABELS[t] ?? `team ${t}`);
+        }
+    }
+
+    if (missing.length > 0) {
+        errors.push(`Each team needs exactly one capital; missing capital for: ${missing.join(', ')}.`);
+    }
+
+    if (missing.length === 0 && capitalPositions.length === teamCount) {
+        const sites = [
+            ...capitalPositions,
+            ...validFlagPositions.map((f) => ({ row: f.row, col: f.col })),
+        ];
+
+        if (!allMarkerSitesMutuallyAccessible(cells, cellRows, cellCols, sites)) {
+            errors.push(
+                'Capitals and flags must all lie in one connected region: you cannot seal a team behind an unbroken wall of mountains.',
+            );
+        }
+    }
+
+    return errors;
 }

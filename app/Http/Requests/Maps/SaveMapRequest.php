@@ -2,7 +2,9 @@
 
 namespace App\Http\Requests\Maps;
 
+use App\Games\GameConstants;
 use App\Maps\MapEditorGrid;
+use App\Maps\MapMarkers;
 use App\Maps\TerrainCatalog;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
@@ -22,26 +24,6 @@ class SaveMapRequest extends FormRequest
         return $map !== null && $this->user()?->id === $map->user_id;
     }
 
-    protected function prepareForValidation(): void
-    {
-        $data = $this->input('data');
-        if (! is_array($data) || ! isset($data['bridges']) || ! is_array($data['bridges'])) {
-            return;
-        }
-
-        foreach ($data['bridges'] as $r => $row) {
-            if (! is_array($row)) {
-                continue;
-            }
-            foreach ($row as $c => $v) {
-                $bool = filter_var($v, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
-                $data['bridges'][$r][$c] = $bool === null ? false : $bool;
-            }
-        }
-
-        $this->merge(['data' => $data]);
-    }
-
     /**
      * @return array<string, ValidationRule|array<mixed>|string>
      */
@@ -50,11 +32,22 @@ class SaveMapRequest extends FormRequest
         return [
             'name' => ['required', 'string', 'max:120'],
             'data' => ['required', 'array'],
-            'data.version' => ['required', 'integer', Rule::in([1])],
+            'data.version' => ['required', 'integer', Rule::in([1, 2])],
             'data.cellRows' => ['required', 'integer', 'min:'.MapEditorGrid::MIN_CELL_ROWS, 'max:'.MapEditorGrid::MAX_CELL_ROWS],
             'data.cellCols' => ['required', 'integer', 'min:'.MapEditorGrid::MIN_CELL_COLS, 'max:'.MapEditorGrid::MAX_CELL_COLS],
             'data.cells' => ['required', 'array'],
-            'data.bridges' => ['required', 'array'],
+            'data.teamCount' => [
+                Rule::requiredIf(fn (): bool => (int) $this->input('data.version', 1) === 2),
+                'nullable',
+                'integer',
+                'min:'.GameConstants::MIN_PLAYERS,
+                'max:'.GameConstants::MAX_PLAYERS,
+            ],
+            'data.markers' => [
+                Rule::requiredIf(fn (): bool => (int) $this->input('data.version', 1) === 2),
+                'nullable',
+                'array',
+            ],
         ];
     }
 
@@ -67,9 +60,8 @@ class SaveMapRequest extends FormRequest
             }
 
             $cells = $data['cells'] ?? null;
-            $bridges = $data['bridges'] ?? null;
 
-            if (! is_array($cells) || ! is_array($bridges)) {
+            if (! is_array($cells)) {
                 return;
             }
 
@@ -100,21 +92,9 @@ class SaveMapRequest extends FormRequest
                 return;
             }
 
-            if (count($bridges) !== $expectedRows) {
-                $validator->errors()->add('data.bridges', "Bridge grid must have {$expectedRows} rows.");
-
-                return;
-            }
-
             for ($r = 0; $r < $expectedRows; $r++) {
                 if (! is_array($cells[$r]) || count($cells[$r]) !== $expectedCols) {
                     $validator->errors()->add('data.cells', "Row {$r} must have {$expectedCols} cells.");
-
-                    return;
-                }
-
-                if (! is_array($bridges[$r]) || count($bridges[$r]) !== $expectedCols) {
-                    $validator->errors()->add('data.bridges', "Bridge row {$r} must have {$expectedCols} values.");
 
                     return;
                 }
@@ -126,13 +106,16 @@ class SaveMapRequest extends FormRequest
 
                         return;
                     }
-
-                    if (! is_bool($bridges[$r][$c])) {
-                        $validator->errors()->add('data.bridges', "Bridge at row {$r}, column {$c} must be boolean.");
-
-                        return;
-                    }
                 }
+            }
+
+            $version = (int) ($data['version'] ?? 1);
+            if ($version !== 2) {
+                return;
+            }
+
+            foreach (MapMarkers::validate($data) as $message) {
+                $validator->errors()->add('data.markers', $message);
             }
         });
     }

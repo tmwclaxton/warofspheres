@@ -1,21 +1,20 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+/* eslint-disable vue/no-mutating-props -- editor exposes mutable refs shared by map builder */
 import {
-    MAP_EDITOR_BRUSH_SIZES,
-    type MapEditorBrushSize,
-    type MapEditorInstance,
-    type MapEditorTool,
-} from '@/composables/useMapEditor';
-import { cn } from '@/lib/utils';
-import {
-    type LucideIcon,
     Eraser,
+    Flag,
     Hand,
+    Landmark,
     Minus,
     PaintBucket,
     Paintbrush,
     Plus,
 } from 'lucide-vue-next';
+import type { LucideIcon } from 'lucide-vue-next';
+import { computed } from 'vue';
+import { MAP_EDITOR_BRUSH_SIZES } from '@/composables/useMapEditor';
+import type { MapEditorBrushSize, MapEditorInstance, MapEditorTool } from '@/composables/useMapEditor';
+import { cn } from '@/lib/utils';
 
 const props = defineProps<{
     editor: MapEditorInstance;
@@ -25,6 +24,8 @@ const tools: { id: MapEditorTool; label: string; icon: LucideIcon }[] = [
     { id: 'brush', label: 'Brush', icon: Paintbrush },
     { id: 'eraser', label: 'Eraser', icon: Eraser },
     { id: 'fill', label: 'Fill', icon: PaintBucket },
+    { id: 'capital', label: 'Capital', icon: Landmark },
+    { id: 'flag', label: 'Flag', icon: Flag },
     { id: 'pan', label: 'Pan', icon: Hand },
 ];
 
