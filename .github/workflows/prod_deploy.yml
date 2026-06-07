@@ -1,18 +1,13 @@
 name: Production Deploy
 
 # Push main (or manual) → build image → GHCR → SSH (optionally via Cloudflare Access / cloudflared)
-# → docker compose pull/up → migrate. Configure DEPLOY_* via repository Variables.
+# → docker compose pull/up → migrate.
+# DEPLOY_HOST / DEPLOY_USER / DEPLOY_DIR: repository Secrets *or* Variables (Secrets win if set).
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
-
-env:
-  DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
-  DEPLOY_USER: ${{ vars.DEPLOY_USER }}
-  DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
-  COMPOSE_PROJECT: warofspheres
 
 jobs:
   build:
@@ -57,17 +52,32 @@ jobs:
     permissions:
       contents: read
       packages: read
+    env:
+      COMPOSE_PROJECT: warofspheres
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Require deploy repository variables
+      - name: Resolve deploy host, user, and directory (Secrets or Variables)
+        env:
+          SECRET_HOST: ${{ secrets.DEPLOY_HOST }}
+          SECRET_USER: ${{ secrets.DEPLOY_USER }}
+          SECRET_DIR: ${{ secrets.DEPLOY_DIR }}
+          VAR_HOST: ${{ vars.DEPLOY_HOST }}
+          VAR_USER: ${{ vars.DEPLOY_USER }}
+          VAR_DIR: ${{ vars.DEPLOY_DIR }}
         run: |
+          H="${SECRET_HOST:-$VAR_HOST}"
+          U="${SECRET_USER:-$VAR_USER}"
+          D="${SECRET_DIR:-$VAR_DIR}"
           missing=0
-          if [ -z "${{ vars.DEPLOY_HOST }}" ]; then echo "::error::Set repository Variable DEPLOY_HOST (SSH hostname)"; missing=1; fi
-          if [ -z "${{ vars.DEPLOY_USER }}" ]; then echo "::error::Set repository Variable DEPLOY_USER (SSH user)"; missing=1; fi
-          if [ -z "${{ vars.DEPLOY_DIR }}" ]; then echo "::error::Set repository Variable DEPLOY_DIR (remote path, e.g. /opt/warofspheres)"; missing=1; fi
-          exit "$missing"
+          if [ -z "$H" ]; then echo "::error::Set repository Secret or Variable DEPLOY_HOST (SSH hostname)"; missing=1; fi
+          if [ -z "$U" ]; then echo "::error::Set repository Secret or Variable DEPLOY_USER (SSH user)"; missing=1; fi
+          if [ -z "$D" ]; then echo "::error::Set repository Secret or Variable DEPLOY_DIR (remote path, e.g. /opt/warofspheres)"; missing=1; fi
+          if [ "$missing" -ne 0 ]; then exit "$missing"; fi
+          echo "DEPLOY_HOST=$H" >> "$GITHUB_ENV"
+          echo "DEPLOY_USER=$U" >> "$GITHUB_ENV"
+          echo "DEPLOY_DIR=$D" >> "$GITHUB_ENV"
 
       - name: GHCR image ref
         run: |

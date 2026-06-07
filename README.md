@@ -261,19 +261,23 @@ CI builds the **`Dockerfile`**, pushes **`ghcr.io/<lowercase github.repository>:
 2. **Build:** checkout → login to GHCR → `docker build` → `docker push`.
 3. **Deploy:** `cloudflared` → SSH key + config (including `ProxyCommand` when using Access) → render image into compose → `scp` → remote `docker login`, `compose pull`, `up -d`, `migrate`, prune.
 
-### GitHub repository **Variables** (Settings → Secrets and variables → Actions → Variables)
+### Deploy target: **Secrets** or **Variables**
 
-| Variable | Example | Purpose |
-|----------|---------|---------|
-| `DEPLOY_HOST` | `ssh.example.com` | SSH target hostname. |
+Use **either** the **Secrets** tab **or** the **Variables** tab for `DEPLOY_HOST`, `DEPLOY_USER`, and `DEPLOY_DIR`. If both are set for the same name, the **Secret** value wins.
+
+| Name | Example | Purpose |
+|------|---------|---------|
+| `DEPLOY_HOST` | `ssh.example.com` | SSH hostname. |
 | `DEPLOY_USER` | `deploy` | SSH user. |
-| `DEPLOY_DIR` | `/opt/warofspheres` | Remote directory containing `.env` and `compose.prod.yaml`. |
+| `DEPLOY_DIR` | `/opt/warofspheres` | Remote directory with `.env` and `compose.prod.yaml`. |
 
-### GitHub repository **Secrets**
+Non-sensitive values are fine as **Variables**; using **Secrets** (as in your screenshot) is also valid.
+
+### Other repository **Secrets**
 
 | Secret | Purpose |
 |--------|---------|
-| `DEPLOY_SSH_PRIVATE_KEY` | Private key for the deploy user (must match `DEPLOY_USER` / `DEPLOY_HOST`). |
+| `DEPLOY_SSH_PRIVATE_KEY` | Private key for `DEPLOY_USER` on `DEPLOY_HOST`. |
 | `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` | Optional: Cloudflare Access service token for `cloudflared access ssh`. Omit only if you use plain SSH without Access. |
 | `GHCR_TOKEN` | PAT with `read:packages` so the server can **`docker login ghcr.io`** and pull the app image. |
 
