@@ -116,14 +116,20 @@ jobs:
         env:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         run: |
-          ssh ${{ env.DEPLOY_HOST }} "
-            set -e
-            echo '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
-            cd ${{ env.DEPLOY_DIR }}
-            docker compose -p ${{ env.COMPOSE_PROJECT }} -f compose.prod.yaml --env-file .env pull
-            docker compose -p ${{ env.COMPOSE_PROJECT }} -f compose.prod.yaml --env-file .env up -d
-            docker compose -p ${{ env.COMPOSE_PROJECT }} -f compose.prod.yaml --env-file .env exec -T app php artisan migrate --force
-            docker image prune -af
-            docker builder prune -af
+          set -euo pipefail
+          if [ -z "${GHCR_TOKEN}" ]; then
+            echo '::error::Set repository secret GHCR_TOKEN (PAT with read:packages for ghcr.io)'
+            exit 1
+          fi
+          # Pipe PAT into ssh stdin so remote docker login gets a real stream (avoids interactive-login / non-TTY errors).
+          printf '%s\n' "${GHCR_TOKEN}" | ssh "${{ env.DEPLOY_HOST }}" bash -euo pipefail -c "
+            docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+            cd '${{ env.DEPLOY_DIR }}'
+            docker compose -p '${{ env.COMPOSE_PROJECT }}' -f compose.prod.yaml --env-file .env pull
+            docker compose -p '${{ env.COMPOSE_PROJECT }}' -f compose.prod.yaml --env-file .env up -d
+            docker compose -p '${{ env.COMPOSE_PROJECT }}' -f compose.prod.yaml --env-file .env exec -T app php artisan migrate --force
+            docker image prune -af || true
+            docker builder prune -af || true
           "
