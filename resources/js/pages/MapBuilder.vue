@@ -176,9 +176,8 @@ onUnmounted(() => {
             >
                 Grid {{ editor.gridRows }}×{{ editor.gridCols }}
             </Button>
-            <span class="text-xs text-muted-foreground"> Brush {{ editor.brushRadius }} </span>
             <span class="hidden text-xs text-muted-foreground sm:inline">
-                [ / ] brush · right-drag pan
+                [ / ] brush size · right-drag pan
             </span>
             <div class="flex flex-1 flex-wrap items-center justify-end gap-2">
                 <p v-if="saveError" class="w-full text-right text-xs text-destructive sm:w-auto">

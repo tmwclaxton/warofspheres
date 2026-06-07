@@ -47,6 +47,10 @@ export const MAP_EDITOR_MIN_ZOOM = 0.04;
 
 export const MAP_EDITOR_MAX_ZOOM = 3;
 
+export const MAP_EDITOR_BRUSH_SIZES = [1, 3, 5] as const;
+
+export type MapEditorBrushSize = (typeof MAP_EDITOR_BRUSH_SIZES)[number];
+
 function getCookie(name: string): string {
     const match = document.cookie.match(new RegExp(`(^|; )${name}=([^;]*)`));
 
@@ -404,12 +408,15 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         );
     }
 
+    function setBrushRadius(size: MapEditorBrushSize): void {
+        brushRadius.value = size;
+    }
+
     function bumpBrush(delta: number): void {
-        const sizes = [1, 3, 5];
-        const i = sizes.indexOf(brushRadius.value);
+        const i = MAP_EDITOR_BRUSH_SIZES.indexOf(brushRadius.value as MapEditorBrushSize);
         const idx = i === -1 ? 0 : i;
-        const next = Math.max(0, Math.min(sizes.length - 1, idx + delta));
-        brushRadius.value = sizes[next] ?? 1;
+        const next = Math.max(0, Math.min(MAP_EDITOR_BRUSH_SIZES.length - 1, idx + delta));
+        brushRadius.value = MAP_EDITOR_BRUSH_SIZES[next] ?? 1;
     }
 
     const canUndo = computed(() => undoStack.value.length > 0);
@@ -451,6 +458,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         loadFromPayload,
         getDataPayload,
         bumpBrush,
+        setBrushRadius,
         applyGeneratedMap,
         generateAndApplyMap,
     };
