@@ -293,6 +293,8 @@ cd /opt/warofspheres
 cp /path/to/.env.example .env     # edit: APP_URL, DB_*, WorkOS, Redis, Reverb, etc.
 ```
 
+The workflow also runs **`mkdir -p`** on `DEPLOY_DIR` over SSH before `scp`, so a missing directory is created **if your deploy user can write the parent** (e.g. `/opt`). If `mkdir` fails with “Permission denied”, create the directory once with **`sudo`** and **`chown`** as above.
+
 Production `.env` should use **`DB_CONNECTION=pgsql`**, **`DB_HOST=pgsql`**, **`REDIS_HOST=redis`** to match `compose.prod.yaml`. The app is exposed on the host as **`8091` → container `80`**; change the port mapping in `compose.prod.yaml` if it conflicts with other stacks.
 
 ### After deploy

@@ -102,13 +102,20 @@ jobs:
             ProxyCommand cloudflared access ssh --hostname %h
           EOF
 
+      - name: Ensure remote deploy directory exists
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          ssh ${{ env.DEPLOY_HOST }} "mkdir -p -- '${{ env.DEPLOY_DIR }}'"
+
       - name: Render and copy compose file
         env:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           sed "s|__GHCR_IMAGE__|${IMAGE_REF}|g" compose.prod.yaml > compose.prod.rendered.yaml
-          scp compose.prod.rendered.yaml ${{ env.DEPLOY_HOST }}:${{ env.DEPLOY_DIR }}/compose.prod.yaml
+          scp compose.prod.rendered.yaml "${{ env.DEPLOY_HOST }}:${{ env.DEPLOY_DIR }}/compose.prod.yaml"
 
       - name: Deploy on server
         env:
