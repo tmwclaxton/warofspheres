@@ -10,11 +10,21 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['uuid', 'code', 'status', 'max_players', 'seed', 'host_user_id', 'winner_user_id', 'settings', 'started_at', 'finished_at'])]
+#[Fillable(['uuid', 'code', 'status', 'max_players', 'seed', 'host_user_id', 'map_id', 'winner_user_id', 'settings', 'started_at', 'finished_at'])]
 class Game extends Model
 {
     /** @use HasFactory<GameFactory> */
     use HasFactory;
+
+    /**
+     * Published community map this lobby was created from (optional).
+     *
+     * @return BelongsTo<Map, $this>
+     */
+    public function map(): BelongsTo
+    {
+        return $this->belongsTo(Map::class);
+    }
 
     /**
      * @return HasMany<GamePlayer, $this>

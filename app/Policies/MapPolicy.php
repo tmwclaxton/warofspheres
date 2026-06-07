@@ -12,9 +12,13 @@ class MapPolicy
         return true;
     }
 
-    public function view(User $user, Map $map): bool
+    public function view(?User $user, Map $map): bool
     {
-        return $user->id === $map->user_id;
+        if ($map->published) {
+            return true;
+        }
+
+        return $user !== null && $user->id === $map->user_id;
     }
 
     public function create(User $user): bool
@@ -24,11 +28,26 @@ class MapPolicy
 
     public function update(User $user, Map $map): bool
     {
-        return $user->id === $map->user_id;
+        return $user->id === $map->user_id && ! $map->published;
     }
 
     public function delete(User $user, Map $map): bool
     {
         return $user->id === $map->user_id;
+    }
+
+    public function publish(User $user, Map $map): bool
+    {
+        return $user->id === $map->user_id && ! $map->published;
+    }
+
+    public function fork(User $user, Map $map): bool
+    {
+        return $map->published;
+    }
+
+    public function vote(User $user, Map $map): bool
+    {
+        return $map->published;
     }
 }

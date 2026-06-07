@@ -4,6 +4,7 @@ namespace App\Http\Requests\Games;
 
 use App\Games\GameConstants;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class CreateGameRequest extends FormRequest
 {
@@ -19,6 +20,12 @@ class CreateGameRequest extends FormRequest
     {
         return [
             'max_players' => ['required', 'integer', 'min:'.GameConstants::MIN_PLAYERS, 'max:'.GameConstants::MAX_PLAYERS],
+            'map_uuid' => [
+                'nullable',
+                'string',
+                'uuid',
+                Rule::exists('maps', 'uuid')->where('published', true),
+            ],
         ];
     }
 }

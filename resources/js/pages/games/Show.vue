@@ -16,6 +16,7 @@ type Lobby = {
     canStart: boolean;
     hostName: string;
     players: Array<{ slot: number; name: string; color: string }>;
+    sourceMap: { uuid: string; name: string; by: string } | null;
 };
 
 const props = defineProps<{
@@ -44,6 +45,21 @@ function startGame() {
             </p>
             <p class="mt-3 text-sm text-muted-foreground">
                 {{ game.playerCount }} / {{ game.maxPlayers }} commanders ready
+            </p>
+        </div>
+
+        <div
+            v-if="game.sourceMap"
+            class="wod-panel border-dashed p-4 text-sm"
+        >
+            <p class="text-xs font-semibold uppercase text-muted-foreground">
+                Map attribution
+            </p>
+            <p class="mt-1 font-medium">
+                {{ game.sourceMap.name }}
+            </p>
+            <p class="text-xs text-muted-foreground">
+                Design by {{ game.sourceMap.by }} · gameplay still uses the procedural battlefield for now.
             </p>
         </div>
 

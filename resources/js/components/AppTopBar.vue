@@ -3,12 +3,15 @@ import { Link, usePage } from '@inertiajs/vue3';
 import {
     BookOpen,
     Clock3,
+    Globe2,
     History,
     Map,
     Swords,
     Users,
 } from 'lucide-vue-next';
 import { computed } from 'vue';
+import FactionSwatches from '@/components/FactionSwatches.vue';
+import ThemeToggle from '@/components/ThemeToggle.vue';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
@@ -16,13 +19,12 @@ import {
     DropdownMenuContent,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import FactionSwatches from '@/components/FactionSwatches.vue';
-import ThemeToggle from '@/components/ThemeToggle.vue';
 import UserMenuContent from '@/components/UserMenuContent.vue';
 import { useCurrentUrl } from '@/composables/useCurrentUrl';
 import { getInitials } from '@/composables/useInitials';
 import { home, mapBuilder, wiki } from '@/routes';
 import { index as lobbies } from '@/routes/lobbies';
+import { explore as mapsExplore } from '@/routes/maps';
 import { ongoing, past } from '@/routes/matches';
 import type { NavItem } from '@/types';
 
@@ -32,6 +34,7 @@ const { isCurrentOrParentUrl } = useCurrentUrl();
 
 const navItems = computed<NavItem[]>(() => [
     { title: 'Wiki', href: wiki().url, icon: BookOpen },
+    { title: 'Explore', href: mapsExplore().url, icon: Globe2 },
     { title: 'Map Builder', href: mapBuilder().url, icon: Map },
     { title: 'Lobbies', href: lobbies().url, icon: Users },
     { title: 'Ongoing', href: ongoing().url, icon: Clock3 },

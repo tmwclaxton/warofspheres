@@ -1,6 +1,18 @@
 <script setup lang="ts">
-import { Head, router, usePage } from '@inertiajs/vue3';
-import { Circle, Flag, Landmark, RectangleHorizontal, Redo2, Save, Sparkles, Undo2 } from 'lucide-vue-next';
+import { Head, Link, router, usePage } from '@inertiajs/vue3';
+import {
+    Circle,
+    Copy,
+    Flag,
+    Landmark,
+    Lock,
+    RectangleHorizontal,
+    Redo2,
+    Save,
+    Sparkles,
+    Undo2,
+    Upload,
+} from 'lucide-vue-next';
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import AppModal from '@/components/AppModal.vue';
 import MapEditorCanvas from '@/components/map-editor/MapEditorCanvas.vue';
@@ -27,12 +39,14 @@ import {
     isAllowedMapGridSize,
 } from '@/lib/mapEditorGrid';
 import { mapBuilder } from '@/routes';
+import { explore as mapsExplore, fork as forkMap, publish as publishMap } from '@/routes/maps';
 import { useToastStore } from '@/stores/toastStore';
 
 export type MapBuilderInitialDocument = {
     uuid: string;
     name: string;
     data: MapDataPayload;
+    published?: boolean;
 };
 
 const props = defineProps<{
@@ -49,6 +63,48 @@ const editor = useMapEditor(props.defaults);
 const toast = useToastStore();
 
 const mapsList = ref<MapSummary[]>([...props.maps]);
+
+const mapPublished = ref(props.initialDocument?.published ?? false);
+
+watch(
+    () => props.initialDocument,
+    (doc) => {
+        mapPublished.value = doc?.published ?? false;
+    },
+    { deep: true },
+);
+
+const editorLocked = computed(() => mapPublished.value);
+
+const hasSavedMap = computed(() => editor.currentUuid.value !== null);
+
+function getCookie(name: string): string {
+    const match = document.cookie.match(new RegExp(`(^|; )${name}=([^;]*)`));
+
+    return match ? decodeURIComponent(match[2] ?? '') : '';
+}
+
+function csrfToken(): string {
+    return (
+        document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ??
+        getCookie('XSRF-TOKEN')
+    );
+}
+
+async function jsonPost(url: string, body: Record<string, unknown> = {}): Promise<Response> {
+    return fetch(url, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-XSRF-TOKEN': decodeURIComponent(getCookie('XSRF-TOKEN')),
+            'X-CSRF-TOKEN': csrfToken(),
+        },
+        body: JSON.stringify(body),
+    });
+}
 
 watch(
     () => props.maps,
@@ -109,6 +165,7 @@ watch(
 
         if (doc?.uuid) {
             editor.loadFromPayload(doc.data, doc.name, doc.uuid);
+            mapPublished.value = doc.published ?? false;
 
             return;
         }
@@ -162,6 +219,10 @@ const editorDirty = computed(() => editor.dirty.value);
 const saving = ref(false);
 
 async function runAutoSave(): Promise<void> {
+    if (editorLocked.value) {
+        return;
+    }
+
     if (!editor.dirty.value || saving.value || autoSaving.value) {
         return;
     }
@@ -181,7 +242,7 @@ async function runAutoSave(): Promise<void> {
             err instanceof Error
                 ? err.message
                 : 'Autosave failed. Check your connection and try again.';
-        toast.error(message, 9000);
+        toast.error(message, message.includes('\n') ? 16_000 : 10_000);
     } finally {
         autoSaving.value = false;
     }
@@ -190,7 +251,7 @@ async function runAutoSave(): Promise<void> {
 watch(
     () => editor.dirty.value,
     (dirty) => {
-        if (!dirty) {
+        if (!dirty || editorLocked.value) {
             return;
         }
 
@@ -328,6 +389,10 @@ function onGenerateMap(payload: {
 }
 
 async function onSave(): Promise<void> {
+    if (editorLocked.value) {
+        return;
+    }
+
     saving.value = true;
 
     try {
@@ -345,9 +410,90 @@ async function onSave(): Promise<void> {
             err instanceof Error
                 ? err.message
                 : 'Save failed. Check your connection and try again.';
-        toast.error(message, 9000);
+        toast.error(message, message.includes('\n') ? 16_000 : 10_000);
     } finally {
         saving.value = false;
+    }
+}
+
+const publishBusy = ref(false);
+const publishConfirmOpen = ref(false);
+const duplicateBusy = ref(false);
+
+function requestPublishConfirm(): void {
+    const uuid = editor.currentUuid.value;
+
+    if (!uuid) {
+        toast.warning('Save the map once before publishing.');
+
+        return;
+    }
+
+    if (editor.dirty.value) {
+        toast.warning('Save your latest changes before publishing.');
+
+        return;
+    }
+
+    publishConfirmOpen.value = true;
+}
+
+async function confirmPublish(): Promise<void> {
+    const uuid = editor.currentUuid.value;
+
+    if (!uuid || editor.dirty.value) {
+        publishConfirmOpen.value = false;
+
+        return;
+    }
+
+    publishBusy.value = true;
+
+    try {
+        const res = await jsonPost(publishMap.url(uuid));
+
+        const text = await res.text();
+
+        if (!res.ok) {
+            toast.error(text.slice(0, 4000), 14_000);
+
+            return;
+        }
+
+        publishConfirmOpen.value = false;
+        mapPublished.value = true;
+        toast.success('Map published. It appears on Explore and editing is locked.');
+        router.reload({ only: ['initialDocument', 'maps'] });
+    } finally {
+        publishBusy.value = false;
+    }
+}
+
+async function onDuplicatePublished(): Promise<void> {
+    const uuid = editor.currentUuid.value;
+
+    if (!uuid || !mapPublished.value) {
+        return;
+    }
+
+    duplicateBusy.value = true;
+
+    try {
+        const res = await jsonPost(forkMap.url(uuid), {});
+
+        const text = await res.text();
+
+        if (!res.ok) {
+            toast.error(text.slice(0, 4000), 14_000);
+
+            return;
+        }
+
+        const body = (await res.json()) as { map: { uuid: string } };
+        toast.success('Editable copy created. Opening it now.');
+        router.visit(mapBuilder.url(body.map.uuid));
+    } finally {
+        duplicateBusy.value = false;
     }
 }
 
@@ -397,7 +543,15 @@ onUnmounted(() => {
                 maxlength="120"
                 placeholder="Map name"
                 autocomplete="off"
+                :disabled="editorLocked"
             />
+            <span
+                v-if="editorLocked"
+                class="inline-flex items-center gap-1 rounded border border-foreground/25 bg-muted/50 px-2 py-0.5 text-xs font-medium text-muted-foreground"
+            >
+                <Lock class="size-3 shrink-0" />
+                Published
+            </span>
             <span
                 v-if="editorDirty"
                 class="text-xs font-medium text-amber-700 dark:text-amber-400"
@@ -423,6 +577,7 @@ onUnmounted(() => {
                 variant="outline"
                 class="h-8 gap-1 px-2 text-xs"
                 title="Replace the map with procedurally generated terrain"
+                :disabled="editorLocked"
                 @click="openGenerateDialog"
             >
                 <Sparkles class="size-3.5" />
@@ -434,6 +589,7 @@ onUnmounted(() => {
                 variant="outline"
                 class="h-8 gap-1 px-2 text-xs"
                 title="Change vertex grid size (rows × columns)"
+                :disabled="editorLocked"
                 @click="openNewMapSizeDialog"
             >
                 Grid {{ editor.gridRows }}×{{ editor.gridCols }}
@@ -445,6 +601,7 @@ onUnmounted(() => {
                 <select
                     id="map-builder-teams"
                     class="wod-field h-8 w-auto min-w-[3.5rem] px-2 font-mono text-xs"
+                    :disabled="editorLocked"
                     :value="headerTeamCount"
                     @change="onTeamCountChange"
                 >
@@ -452,11 +609,14 @@ onUnmounted(() => {
                 </select>
             </div>
             <div class="flex flex-1 flex-wrap items-center justify-end gap-2">
+                <Button type="button" size="sm" variant="ghost" class="h-8 px-2 text-xs" as-child>
+                    <Link :href="mapsExplore().url">Explore</Link>
+                </Button>
                 <Button
                     type="button"
                     size="sm"
                     variant="outline"
-                    :disabled="!editor.canUndo"
+                    :disabled="!editor.canUndo || editorLocked"
                     class="gap-1"
                     @click="editor.undo()"
                 >
@@ -467,7 +627,7 @@ onUnmounted(() => {
                     type="button"
                     size="sm"
                     variant="outline"
-                    :disabled="!editor.canRedo"
+                    :disabled="!editor.canRedo || editorLocked"
                     class="gap-1"
                     @click="editor.redo()"
                 >
@@ -478,11 +638,37 @@ onUnmounted(() => {
                     type="button"
                     size="sm"
                     class="gap-1"
-                    :disabled="saving || autoSaving"
+                    :disabled="saving || autoSaving || editorLocked"
                     @click="onSave"
                 >
                     <Save class="size-3.5" />
                     {{ saving ? 'Saving…' : autoSaving ? 'Autosaving…' : 'Save' }}
+                </Button>
+                <Button
+                    v-if="!editorLocked"
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    class="gap-1"
+                    :disabled="publishBusy || !hasSavedMap || editorDirty"
+                    title="Validate, publish, and lock editing"
+                    @click="requestPublishConfirm"
+                >
+                    <Upload class="size-3.5" />
+                    Publish
+                </Button>
+                <Button
+                    v-else
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    class="gap-1"
+                    :disabled="duplicateBusy || !hasSavedMap"
+                    title="Create an editable copy in your library (the published map stays public)"
+                    @click="onDuplicatePublished"
+                >
+                    <Copy class="size-3.5" />
+                    {{ duplicateBusy ? 'Duplicating…' : 'Duplicate' }}
                 </Button>
             </div>
         </div>
@@ -497,12 +683,18 @@ onUnmounted(() => {
                 @open-map="onOpenMapFromList"
                 @request-new-map="onRequestNewMap"
             />
-            <MapEditorToolbar :editor="editor" />
-            <MapEditorCanvas :editor="editor" :team-colors="teamColors" class="min-h-0 min-w-0 flex-1" />
+            <MapEditorToolbar :editor="editor" :read-only="editorLocked" />
+            <MapEditorCanvas
+                :editor="editor"
+                :team-colors="teamColors"
+                :read-only="editorLocked"
+                class="min-h-0 min-w-0 flex-1"
+            />
         </div>
 
         <div
             class="flex w-full min-w-0 shrink-0 flex-row items-stretch gap-2 border-t border-foreground/15 py-1.5 min-h-[8.5rem]"
+            :class="{ 'pointer-events-none opacity-60': editorLocked }"
         >
             <MapTerrainPalette
                 :editor="editor"
@@ -524,6 +716,27 @@ onUnmounted(() => {
             :team-count="headerTeamCount"
             @generate="onGenerateMap"
         />
+
+        <AppModal
+            v-model:open="publishConfirmOpen"
+            title="Publish this map?"
+            description="It will appear on Explore for everyone. You cannot take it back or edit this version afterward. Use Duplicate afterward if you want an editable copy while keeping the public design."
+            content-class="sm:max-w-lg"
+        >
+            <template #footer>
+                <Button
+                    type="button"
+                    variant="outline"
+                    :disabled="publishBusy"
+                    @click="publishConfirmOpen = false"
+                >
+                    Cancel
+                </Button>
+                <Button type="button" :disabled="publishBusy" @click="confirmPublish">
+                    {{ publishBusy ? 'Publishing…' : 'Publish' }}
+                </Button>
+            </template>
+        </AppModal>
 
         <AppModal
             v-model:open="teamMarkerDialogOpen"

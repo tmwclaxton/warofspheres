@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { useToastStore, MAX_TOASTS, type Toast } from '@/stores/toastStore';
 import { CheckCircle, Info, TriangleAlert, XCircle, X } from 'lucide-vue-next';
 import { computed, onUnmounted, watch } from 'vue';
+import { useToastStore, MAX_TOASTS  } from '@/stores/toastStore';
+import type {Toast} from '@/stores/toastStore';
 
 const toastStore = useToastStore();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -93,11 +94,11 @@ onUnmounted(() => {
                 <div
                     v-for="toast in toastStore.toasts"
                     :key="toast.id"
-                    :class="['flex w-80 max-w-sm items-start gap-3 rounded-lg border px-4 py-3 shadow-lg', styles[toast.type]]"
+                    :class="['flex w-full min-w-72 max-w-md items-start gap-3 rounded-lg border px-4 py-3 shadow-lg', styles[toast.type]]"
                     role="alert"
                 >
                     <component :is="icons[toast.type]" :class="['mt-0.5 size-4 shrink-0', iconStyles[toast.type]]" />
-                    <p class="flex-1 text-sm font-medium">{{ toast.message }}</p>
+                    <p class="flex-1 whitespace-pre-wrap break-words text-sm font-medium">{{ toast.message }}</p>
                     <button
                         class="shrink-0 opacity-60 transition-opacity hover:opacity-100 focus:outline-none"
                         aria-label="Dismiss"

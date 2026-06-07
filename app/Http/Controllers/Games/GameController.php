@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Games\CreateGameRequest;
 use App\Http\Requests\Games\SubmitOrdersRequest;
 use App\Models\Game;
+use App\Models\Map;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -19,7 +20,7 @@ class GameController extends Controller
     {
         $lobbies = Game::query()
             ->where('status', GameStatus::Lobby)
-            ->with(['players.user', 'host'])
+            ->with(['players.user', 'host', 'map.user'])
             ->latest()
             ->limit(20)
             ->get()
@@ -35,7 +36,7 @@ class GameController extends Controller
         $matches = Game::query()
             ->where('status', GameStatus::Playing)
             ->whereHas('players', fn ($query) => $query->where('user_id', $request->user()->id))
-            ->with(['players.user', 'host'])
+            ->with(['players.user', 'host', 'map.user'])
             ->latest('started_at')
             ->limit(20)
             ->get()
@@ -51,7 +52,7 @@ class GameController extends Controller
         $matches = Game::query()
             ->where('status', GameStatus::Finished)
             ->whereHas('players', fn ($query) => $query->where('user_id', $request->user()->id))
-            ->with(['players.user', 'host', 'winner'])
+            ->with(['players.user', 'host', 'winner', 'map.user'])
             ->latest('finished_at')
             ->limit(20)
             ->get()
@@ -64,9 +65,18 @@ class GameController extends Controller
 
     public function store(CreateGameRequest $request, GameManager $gameManager): RedirectResponse
     {
+        $map = null;
+        if ($request->filled('map_uuid')) {
+            $map = Map::query()
+                ->where('uuid', $request->string('map_uuid'))
+                ->where('published', true)
+                ->firstOrFail();
+        }
+
         $game = $gameManager->create(
             $request->user(),
             $request->integer('max_players'),
+            $map,
         );
 
         Inertia::flash('toast', ['type' => 'success', 'message' => 'Lobby created.']);
@@ -76,7 +86,7 @@ class GameController extends Controller
 
     public function show(Request $request, Game $game): Response
     {
-        $game->load(['players.user', 'host']);
+        $game->load(['players.user', 'host', 'map.user']);
 
         return Inertia::render('games/Show', [
             'game' => $this->serializeLobby($game, $request->user()?->id),
@@ -170,6 +180,17 @@ class GameController extends Controller
      */
     private function serializeLobby(Game $game, ?int $userId): array
     {
+        $game->loadMissing('map.user');
+
+        $sourceMap = null;
+        if ($game->map !== null) {
+            $sourceMap = [
+                'uuid' => $game->map->uuid,
+                'name' => $game->map->name,
+                'by' => $game->map->user?->name ?? 'Unknown',
+            ];
+        }
+
         return [
             'uuid' => $game->uuid,
             'code' => $game->code,
@@ -185,6 +206,7 @@ class GameController extends Controller
                 'name' => $player->user->name,
                 'color' => $player->color,
             ])->values(),
+            'sourceMap' => $sourceMap,
         ];
     }
 }

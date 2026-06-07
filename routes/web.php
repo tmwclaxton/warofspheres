@@ -10,10 +10,15 @@ Route::inertia('/', 'Welcome')->name('home');
 
 Route::get('/wiki', fn () => Inertia::render('Wiki', GameSpecs::forWiki()))->name('wiki');
 
+Route::get('maps/explore', [MapController::class, 'explore'])->name('maps.explore');
+
 Route::middleware(['auth'])->group(function () {
     Route::get('map-builder/{map?}', [MapController::class, 'builder'])->name('map-builder');
     Route::get('maps', [MapController::class, 'index'])->name('maps.index');
     Route::post('maps', [MapController::class, 'store'])->name('maps.store');
+    Route::post('maps/{map}/publish', [MapController::class, 'publish'])->name('maps.publish');
+    Route::post('maps/{map}/fork', [MapController::class, 'fork'])->name('maps.fork');
+    Route::post('maps/{map}/vote', [MapController::class, 'vote'])->name('maps.vote');
     Route::get('maps/{map}', [MapController::class, 'show'])->name('maps.show');
     Route::patch('maps/{map}', [MapController::class, 'update'])->name('maps.update');
     Route::delete('maps/{map}', [MapController::class, 'destroy'])->name('maps.destroy');

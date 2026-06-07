@@ -120,6 +120,40 @@ class MapTest extends TestCase
         ]);
     }
 
+    public function test_store_accepts_version_two_payload_with_empty_markers_array(): void
+    {
+        $user = User::factory()->create();
+        $data = MapEditorGrid::emptyData(12, 10);
+
+        $this->assertSame([], $data['markers']);
+
+        $this->actingAs($user)
+            ->postJson(route('maps.store'), [
+                'name' => 'Draft plains',
+                'data' => $data,
+            ])
+            ->assertCreated()
+            ->assertJsonPath('map.name', 'Draft plains');
+
+        $map = Map::query()->where('user_id', $user->id)->firstOrFail();
+        $this->assertSame([], $map->data['markers']);
+    }
+
+    public function test_store_version_two_rejects_payload_when_markers_key_is_omitted(): void
+    {
+        $user = User::factory()->create();
+        $data = MapEditorGrid::emptyData(12, 10);
+        unset($data['markers']);
+
+        $this->actingAs($user)
+            ->postJson(route('maps.store'), [
+                'name' => 'Bad payload',
+                'data' => $data,
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['data.markers']);
+    }
+
     public function test_user_cannot_view_another_users_map(): void
     {
         $owner = User::factory()->create();
@@ -565,5 +599,91 @@ class MapTest extends TestCase
                 'data' => $data,
             ])
             ->assertUnprocessable();
+    }
+
+    public function test_guest_can_view_maps_explore(): void
+    {
+        $this->get(route('maps.explore'))
+            ->assertOk()
+            ->assertInertia(fn (AssertableInertia $page) => $page
+                ->component('MapExplore')
+                ->has('maps'));
+    }
+
+    public function test_owner_can_publish_valid_map(): void
+    {
+        $user = User::factory()->create();
+        $data = $this->v2DataWithTwoCapitals();
+        $map = Map::factory()->for($user)->create(['name' => 'Ready', 'data' => $data]);
+
+        $this->actingAs($user)
+            ->postJson(route('maps.publish', $map))
+            ->assertOk()
+            ->assertJsonPath('map.published', true);
+
+        $this->assertTrue($map->fresh()->published);
+    }
+
+    public function test_owner_cannot_patch_published_map(): void
+    {
+        $user = User::factory()->create();
+        $data = $this->v2DataWithTwoCapitals();
+        $map = Map::factory()->for($user)->create(['name' => 'Locked', 'data' => $data]);
+        $map->update(['published' => true, 'published_at' => now()]);
+
+        $this->actingAs($user)
+            ->patchJson(route('maps.update', $map), [
+                'name' => 'Renamed',
+                'data' => $data,
+            ])
+            ->assertForbidden();
+    }
+
+    public function test_user_can_fork_published_map(): void
+    {
+        $owner = User::factory()->create();
+        $guest = User::factory()->create();
+        $data = $this->v2DataWithTwoCapitals();
+        $map = Map::factory()->for($owner)->create(['data' => $data, 'forks_count' => 0]);
+        $map->update(['published' => true, 'published_at' => now()]);
+
+        $this->actingAs($guest)
+            ->postJson(route('maps.fork', $map))
+            ->assertCreated();
+
+        $fork = Map::query()->where('user_id', $guest->id)->firstOrFail();
+        $this->assertSame($map->id, $fork->forked_from_id);
+        $this->assertSame(1, $map->fresh()->forks_count);
+    }
+
+    public function test_owner_can_fork_own_published_map(): void
+    {
+        $owner = User::factory()->create();
+        $data = $this->v2DataWithTwoCapitals();
+        $map = Map::factory()->for($owner)->create(['data' => $data, 'forks_count' => 0]);
+        $map->update(['published' => true, 'published_at' => now()]);
+
+        $this->actingAs($owner)
+            ->postJson(route('maps.fork', $map))
+            ->assertCreated();
+
+        $fork = Map::query()->where('forked_from_id', $map->id)->where('user_id', $owner->id)->firstOrFail();
+        $this->assertSame($map->id, $fork->forked_from_id);
+        $this->assertSame(1, $map->fresh()->forks_count);
+    }
+
+    public function test_user_can_vote_on_published_map(): void
+    {
+        $owner = User::factory()->create();
+        $voter = User::factory()->create();
+        $data = $this->v2DataWithTwoCapitals();
+        $map = Map::factory()->for($owner)->create(['data' => $data]);
+        $map->update(['published' => true, 'published_at' => now()]);
+
+        $this->actingAs($voter)
+            ->postJson(route('maps.vote', $map), ['vote' => 'like'])
+            ->assertOk();
+
+        $this->assertSame(1, $map->fresh()->likes_count);
     }
 }

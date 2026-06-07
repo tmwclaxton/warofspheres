@@ -11,6 +11,7 @@ export type MapSummary = {
     uuid: string;
     name: string;
     updated_at: string | null;
+    published?: boolean;
 };
 
 const props = defineProps<{
@@ -133,6 +134,7 @@ function formatUpdated(iso: string | null): string {
                         <span class="block truncate">{{ m.name }}</span>
                         <span class="block truncate text-[10px] font-normal text-muted-foreground">
                             {{ formatUpdated(m.updated_at) }}
+                            <span v-if="m.published" class="ml-1 font-semibold text-foreground">· Public</span>
                         </span>
                     </button>
                     <Button

@@ -11,6 +11,8 @@ import { editorBlendedTerrainFillStyle } from '@/lib/terrainRender';
 const props = defineProps<{
     editor: MapEditorInstance;
     teamColors: { slot: number; hex: string; label: string }[];
+    /** When true, only pan / zoom — no terrain or marker edits. */
+    readOnly?: boolean;
 }>();
 
 function hexForTeam(team: number): string {
@@ -293,6 +295,15 @@ function onPointerDown(e: PointerEvent): void {
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
     lastMouse = [sx, sy];
+
+    if (props.readOnly) {
+        if (e.button === 0 || e.button === 2) {
+            panning = true;
+            canvas.setPointerCapture(e.pointerId);
+        }
+
+        return;
+    }
 
     if (e.button === 2 || props.editor.activeTool.value === 'pan') {
         panning = true;

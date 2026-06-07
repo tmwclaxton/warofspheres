@@ -3,7 +3,10 @@
 namespace Tests\Feature\Games;
 
 use App\Enums\GameStatus;
+use App\Maps\MapEditorGrid;
+use App\Maps\MapMarkers;
 use App\Models\Game;
+use App\Models\Map;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Redis;
@@ -76,5 +79,38 @@ class GameLobbyTest extends TestCase
         $this->assertSame(GameStatus::Playing, $game->status);
         $this->assertTrue(Redis::exists('game:live:'.$game->uuid) > 0);
         $this->assertContains($game->uuid, Redis::smembers('games:active'));
+    }
+
+    public function test_create_lobby_with_published_map_uuid_sets_map_id(): void
+    {
+        $host = User::factory()->create();
+        $owner = User::factory()->create();
+        $data = MapEditorGrid::emptyData(24, 18);
+        $data['markers'] = [
+            [
+                'type' => MapMarkers::TYPE_CAPITAL,
+                'team' => 0,
+                'row' => 5,
+                'col' => 5,
+            ],
+            [
+                'type' => MapMarkers::TYPE_CAPITAL,
+                'team' => 1,
+                'row' => 20,
+                'col' => 15,
+            ],
+        ];
+        $map = Map::factory()->for($owner)->create(['name' => 'Arena', 'data' => $data]);
+        $map->update(['published' => true, 'published_at' => now()]);
+
+        $this->actingAs($host)
+            ->post(route('games.store'), [
+                'max_players' => 2,
+                'map_uuid' => $map->uuid,
+            ])
+            ->assertRedirect();
+
+        $game = Game::query()->firstOrFail();
+        $this->assertSame($map->id, $game->map_id);
     }
 }

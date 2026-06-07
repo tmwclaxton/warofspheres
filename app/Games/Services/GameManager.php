@@ -10,8 +10,10 @@ use App\Games\Engine\Environment;
 use App\Games\GameConstants;
 use App\Models\Game;
 use App\Models\GamePlayer;
+use App\Models\Map;
 use App\Models\User;
 use Illuminate\Support\Facades\Redis;
+use Illuminate\Support\Str;
 
 final class GameManager
 {
@@ -22,17 +24,26 @@ final class GameManager
         private GameTickService $tickService,
     ) {}
 
-    public function create(User $host, int $maxPlayers): Game
+    public function create(User $host, int $maxPlayers, ?Map $sourceMap = null): Game
     {
         $maxPlayers = max(GameConstants::MIN_PLAYERS, min(GameConstants::MAX_PLAYERS, $maxPlayers));
 
+        $settings = $sourceMap === null
+            ? null
+            : [
+                'source_map_uuid' => $sourceMap->uuid,
+                'source_map_name' => $sourceMap->name,
+            ];
+
         $game = Game::query()->create([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(),
+            'uuid' => (string) Str::uuid(),
             'code' => $this->codeGenerator->generate(),
             'status' => GameStatus::Lobby,
             'max_players' => $maxPlayers,
             'seed' => random_int(1, PHP_INT_MAX),
             'host_user_id' => $host->id,
+            'map_id' => $sourceMap?->id,
+            'settings' => $settings,
         ]);
 
         $this->join($game, $host);
@@ -80,6 +91,10 @@ final class GameManager
             'status' => GameStatus::Playing,
             'started_at' => now(),
         ]);
+
+        if ($game->map_id !== null) {
+            Map::query()->whereKey($game->map_id)->increment('games_count');
+        }
 
         $this->storeLiveState($game, [
             'environment' => $environment->toArray(),

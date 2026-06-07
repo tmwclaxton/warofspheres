@@ -25,4 +25,12 @@ class MapFactory extends Factory
             'data' => MapEditorGrid::emptyData(),
         ];
     }
+
+    public function published(): static
+    {
+        return $this->state(fn () => [
+            'published' => true,
+            'published_at' => now(),
+        ]);
+    }
 }

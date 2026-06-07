@@ -108,6 +108,123 @@ async function jsonFetch(
     });
 }
 
+type LaravelJsonErrors = {
+    message?: string;
+    errors?: Record<string, string[] | string | number>;
+};
+
+function humanizeValidationFieldKey(key: string): string {
+    const map: Record<string, string> = {
+        name: 'Map name',
+        'data.version': 'Map format',
+        'data.cellRows': 'Map height (rows)',
+        'data.cellCols': 'Map width (columns)',
+        'data.cells': 'Terrain grid',
+        'data.markers': 'Capitals & troops',
+        'data.teamCount': 'Number of teams',
+        'data.teamPaletteSlots': 'Team colour slots',
+    };
+
+    if (map[key]) {
+        return map[key];
+    }
+
+    if (key.startsWith('data.teamPaletteSlots.')) {
+        return 'Team colour slots';
+    }
+
+    return key;
+}
+
+function isGenericInvalidMessage(message: string): boolean {
+    const t = message.trim();
+
+    return (
+        /^The .+ was invalid\.?$/i.test(t)
+        || /^The given data was invalid\.?$/i.test(t)
+        || t === 'validation.required'
+    );
+}
+
+/**
+ * Builds a readable error string from a failed map save (JSON) response.
+ */
+export function formatMapSaveErrorFromResponse(status: number, responseText: string): string {
+    let parsed: unknown;
+
+    try {
+        parsed = JSON.parse(responseText) as unknown;
+    } catch {
+        const snippet = responseText.trim().slice(0, 240);
+
+        return snippet.length > 0
+            ? `Could not save (${status}). Server said:\n${snippet}`
+            : mapSaveHttpStatusMessage(status);
+    }
+
+    const body = parsed as LaravelJsonErrors;
+    const lines: string[] = [];
+
+    if (body.errors !== undefined && body.errors !== null && typeof body.errors === 'object') {
+        for (const [key, raw] of Object.entries(body.errors)) {
+            const label = humanizeValidationFieldKey(key);
+            const msgs: string[] = Array.isArray(raw)
+                ? raw.map((m) => String(m))
+                : [String(raw)];
+
+            for (const m of msgs) {
+                const t = m.trim();
+
+                if (t.length > 0) {
+                    lines.push(`• ${label}: ${t}`);
+                }
+            }
+        }
+    }
+
+    const rawMessage = typeof body.message === 'string' ? body.message.trim() : '';
+
+    if (lines.length > 0) {
+        const headline = rawMessage && !isGenericInvalidMessage(rawMessage) ? `${rawMessage}\n` : 'Could not save this map:\n';
+
+        return `${headline}${lines.join('\n')}`.slice(0, 4000);
+    }
+
+    if (rawMessage.length > 0) {
+        return rawMessage;
+    }
+
+    return mapSaveHttpStatusMessage(status);
+}
+
+function mapSaveHttpStatusMessage(status: number): string {
+    if (status === 401) {
+        return 'You need to be signed in to save maps. Refresh the page and sign in again.';
+    }
+
+    if (status === 403) {
+        return 'You do not have permission to save this map.';
+    }
+
+    if (status === 404) {
+        return 'That map was not found. It may have been deleted — try picking another map from the list.';
+    }
+
+    if (status === 419) {
+        return 'Your session expired (CSRF). Refresh the page and try saving again.';
+    }
+
+    if (status === 422) {
+        return 'The map could not be saved because some fields are invalid. Check the form and try again.';
+    }
+
+    if (status >= 500) {
+        return 'The server had a problem saving the map. Wait a moment and try again.';
+    }
+
+    return `Could not save the map (HTTP ${status}). Check your connection and try again.`;
+}
+
 /** Row shape returned by {@see MapController::index} for the map-builder sidebar. */
 export type MapListSummary = {
     id: number;
@@ -738,9 +855,10 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
                 },
                 body: JSON.stringify({ name, data }),
             });
+            const text = await res.text();
 
             if (!res.ok) {
-                throw new Error('Save failed');
+                throw new Error(formatMapSaveErrorFromResponse(res.status, text));
             }
         } else {
             const res = await jsonFetch(store.url(), {
@@ -751,12 +869,13 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
                 },
                 body: JSON.stringify({ name, data }),
             });
+            const text = await res.text();
 
             if (!res.ok) {
-                throw new Error('Create failed');
+                throw new Error(formatMapSaveErrorFromResponse(res.status, text));
             }
 
-            const body = (await res.json()) as { map: { uuid: string } };
+            const body = JSON.parse(text) as { map: { uuid: string } };
             currentUuid.value = body.map.uuid;
         }
 

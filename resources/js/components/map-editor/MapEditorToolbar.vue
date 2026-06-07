@@ -11,12 +11,24 @@ import {
     RectangleHorizontal,
 } from 'lucide-vue-next';
 import type { LucideIcon } from 'lucide-vue-next';
+import { watch } from 'vue';
 import type { MapEditorInstance, MapEditorTool } from '@/composables/useMapEditor';
 import { cn } from '@/lib/utils';
 
 const props = defineProps<{
     editor: MapEditorInstance;
+    readOnly?: boolean;
 }>();
+
+watch(
+    () => props.readOnly,
+    (ro) => {
+        if (ro) {
+            props.editor.activeTool.value = 'pan';
+        }
+    },
+    { immediate: true },
+);
 
 const tools: { id: MapEditorTool; label: string; icon: LucideIcon }[] = [
     { id: 'brush', label: 'Brush', icon: Paintbrush },
@@ -30,13 +42,17 @@ const tools: { id: MapEditorTool; label: string; icon: LucideIcon }[] = [
 ];
 
 function setTool(id: MapEditorTool): void {
+    if (props.readOnly && id !== 'pan') {
+        return;
+    }
+
     props.editor.activeTool.value = id;
 }
 </script>
 
 <template>
     <div
-        class="flex w-14 shrink-0 flex-col gap-1 wod-surface p-1"
+        class="flex w-fit shrink-0 flex-col items-center gap-1 wod-surface px-1.5 py-1.5"
         role="toolbar"
         aria-label="Map tools"
     >
@@ -44,6 +60,7 @@ function setTool(id: MapEditorTool): void {
             v-for="tool in tools"
             :key="tool.id"
             type="button"
+            :disabled="readOnly && tool.id !== 'pan'"
             :class="
                 cn(
                     'flex size-9 items-center justify-center rounded-md border border-transparent text-foreground transition-colors hover:bg-muted/80',
