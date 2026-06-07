@@ -48,6 +48,9 @@ class SaveMapRequest extends FormRequest
                 'nullable',
                 'array',
             ],
+            // Must be listed here or `validated('data')` drops it and palette colours reset on reload.
+            'data.teamPaletteSlots' => ['sometimes', 'nullable', 'array'],
+            'data.teamPaletteSlots.*' => ['integer', 'min:0', 'max:'.(GameConstants::MAX_PLAYERS - 1)],
         ];
     }
 
@@ -114,7 +117,7 @@ class SaveMapRequest extends FormRequest
                 return;
             }
 
-            foreach (MapMarkers::validate($data) as $message) {
+            foreach (MapMarkers::validatePersistable($data) as $message) {
                 $validator->errors()->add('data.markers', $message);
             }
         });

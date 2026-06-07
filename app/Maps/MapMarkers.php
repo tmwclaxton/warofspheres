@@ -76,6 +76,92 @@ final class MapMarkers
     }
 
     /**
+     * @return list<int> One faction palette index per logical team `0 .. $teamCount - 1`
+     */
+    private static function normalizeTeamPaletteSlots(int $teamCount, mixed $raw): array
+    {
+        $max = GameConstants::MAX_PLAYERS;
+        if ($teamCount < GameConstants::MIN_PLAYERS || $teamCount > $max) {
+            return range(0, max(0, GameConstants::MIN_PLAYERS - 1));
+        }
+        if (! is_array($raw) || count($raw) !== $teamCount) {
+            return range(0, $teamCount - 1);
+        }
+        $out = [];
+        foreach ($raw as $v) {
+            if (! is_int($v) && ! (is_numeric($v) && (string) (int) $v === (string) $v)) {
+                return range(0, $teamCount - 1);
+            }
+            $iv = (int) $v;
+            if ($iv < 0 || $iv >= $max) {
+                return range(0, $teamCount - 1);
+            }
+            $out[] = $iv;
+        }
+        if (count(array_unique($out)) !== count($out)) {
+            return range(0, $teamCount - 1);
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function validateTeamPaletteSlotsInput(int $teamCount, mixed $raw): array
+    {
+        $errors = [];
+        if ($raw === null) {
+            return $errors;
+        }
+        if (! is_array($raw)) {
+            $errors[] = 'teamPaletteSlots must be an array.';
+
+            return $errors;
+        }
+        if (count($raw) !== $teamCount) {
+            $errors[] = "teamPaletteSlots must have length {$teamCount}.";
+
+            return $errors;
+        }
+        $max = GameConstants::MAX_PLAYERS;
+        $seen = [];
+        foreach ($raw as $i => $v) {
+            if (! is_int($v) && ! (is_numeric($v) && (string) (int) $v === (string) $v)) {
+                $errors[] = "teamPaletteSlots[{$i}] must be an integer.";
+
+                return $errors;
+            }
+            $iv = (int) $v;
+            if ($iv < 0 || $iv >= $max) {
+                $errors[] = 'teamPaletteSlots entries must be between 0 and '.($max - 1).'.';
+
+                return $errors;
+            }
+            if (isset($seen[$iv])) {
+                $errors[] = 'teamPaletteSlots must not assign the same faction colour to two teams.';
+
+                return $errors;
+            }
+            $seen[$iv] = true;
+        }
+
+        return $errors;
+    }
+
+    /**
+     * Human label for a logical team index using the palette slot map.
+     *
+     * @param  list<int>  $palette
+     */
+    private static function factionLabelFromPalette(array $palette, int $teamIndex): string
+    {
+        $slot = $palette[$teamIndex] ?? $teamIndex;
+
+        return self::FACTION_LABELS[$slot] ?? "team {$teamIndex}";
+    }
+
+    /**
      * Validate v2 marker rules. Assumes terrain grid is already valid.
      *
      * @param  array<string, mixed>  $data  Full map data (version 2)
@@ -113,6 +199,16 @@ final class MapMarkers
 
             return $errors;
         }
+
+        foreach (self::validateTeamPaletteSlotsInput($teamCount, $data['teamPaletteSlots'] ?? null) as $msg) {
+            $errors[] = $msg;
+        }
+        if ($errors !== []) {
+            return $errors;
+        }
+
+        /** @var list<int> $palette */
+        $palette = self::normalizeTeamPaletteSlots($teamCount, $data['teamPaletteSlots'] ?? null);
 
         $occupied = [];
         $capitalsByTeam = [];
@@ -202,7 +298,7 @@ final class MapMarkers
 
             if ($type === self::TYPE_CAPITAL) {
                 if (isset($capitalsByTeam[$team])) {
-                    $errors[] = "Team {$team} has more than one capital.";
+                    $errors[] = self::factionLabelFromPalette($palette, $team).' has more than one capital.';
 
                     continue;
                 }
@@ -252,7 +348,7 @@ final class MapMarkers
         if ($minFlags !== $maxFlags) {
             $parts = [];
             for ($t = 0; $t < $teamCount; $t++) {
-                $parts[] = (self::FACTION_LABELS[$t] ?? "team {$t}").': '.$flagCounts[$t];
+                $parts[] = self::factionLabelFromPalette($palette, $t).': '.$flagCounts[$t];
             }
             $errors[] = 'Each team must have the same number of flags (current counts: '.implode(', ', $parts).').';
         }
@@ -260,7 +356,7 @@ final class MapMarkers
         $missingCapitals = [];
         for ($t = 0; $t < $teamCount; $t++) {
             if (! isset($capitalsByTeam[$t])) {
-                $missingCapitals[] = self::FACTION_LABELS[$t] ?? "team {$t}";
+                $missingCapitals[] = self::factionLabelFromPalette($palette, $t);
             }
         }
         if ($missingCapitals !== []) {
@@ -277,6 +373,128 @@ final class MapMarkers
             }
             if (! self::allMarkerSitesMutuallyAccessible($cells, $cellRows, $cellCols, $markerSites)) {
                 $errors[] = 'Capitals and flags must all lie in one connected region: you cannot seal a team behind an unbroken wall of mountains.';
+            }
+        }
+
+        return $errors;
+    }
+
+    /**
+     * Structural checks only for persisting map drafts (no spacing, water buffer, capital/flag
+     * counts, or connectivity rules — those apply when placing markers in the editor or when
+     * generating maps).
+     *
+     * @param  array<string, mixed>  $data  Full map data (version 2)
+     * @return list<string> Human-readable errors (empty if valid)
+     */
+    public static function validatePersistable(array $data): array
+    {
+        $errors = [];
+
+        $teamCount = $data['teamCount'] ?? null;
+        if (! is_int($teamCount) && ! (is_numeric($teamCount) && (string) (int) $teamCount === (string) $teamCount)) {
+            $errors[] = 'teamCount must be an integer.';
+
+            return $errors;
+        }
+        $teamCount = (int) $teamCount;
+        if ($teamCount < GameConstants::MIN_PLAYERS || $teamCount > GameConstants::MAX_PLAYERS) {
+            $errors[] = 'teamCount must be between '.GameConstants::MIN_PLAYERS.' and '.GameConstants::MAX_PLAYERS.'.';
+
+            return $errors;
+        }
+
+        $markers = $data['markers'] ?? null;
+        if (! is_array($markers)) {
+            $errors[] = 'markers must be an array.';
+
+            return $errors;
+        }
+
+        $cellRows = (int) ($data['cellRows'] ?? 0);
+        $cellCols = (int) ($data['cellCols'] ?? 0);
+        $cells = $data['cells'] ?? null;
+        if (! is_array($cells)) {
+            $errors[] = 'cells must be an array for marker validation.';
+
+            return $errors;
+        }
+
+        foreach (self::validateTeamPaletteSlotsInput($teamCount, $data['teamPaletteSlots'] ?? null) as $msg) {
+            $errors[] = $msg;
+        }
+        if ($errors !== []) {
+            return $errors;
+        }
+
+        $occupied = [];
+
+        foreach ($markers as $index => $marker) {
+            if (! is_array($marker)) {
+                $errors[] = "markers[{$index}] must be an object.";
+
+                continue;
+            }
+
+            $type = $marker['type'] ?? null;
+            if ($type !== self::TYPE_CAPITAL && $type !== self::TYPE_FLAG) {
+                $errors[] = "markers[{$index}].type must be \"capital\" or \"flag\".";
+
+                continue;
+            }
+
+            $team = $marker['team'] ?? null;
+            if (! is_int($team) && ! (is_numeric($team) && (string) (int) $team === (string) $team)) {
+                $errors[] = "markers[{$index}].team must be an integer.";
+
+                continue;
+            }
+            $team = (int) $team;
+            if ($team < 0 || $team >= GameConstants::MAX_PLAYERS) {
+                $errors[] = "markers[{$index}].team must be between 0 and ".(GameConstants::MAX_PLAYERS - 1).'.';
+
+                continue;
+            }
+            if ($team >= $teamCount) {
+                $errors[] = "markers[{$index}].team must be less than teamCount ({$teamCount}).";
+
+                continue;
+            }
+
+            $row = $marker['row'] ?? null;
+            $col = $marker['col'] ?? null;
+            if (! is_int($row) && ! (is_numeric($row) && (string) (int) $row === (string) $row)) {
+                $errors[] = "markers[{$index}].row must be an integer.";
+
+                continue;
+            }
+            if (! is_int($col) && ! (is_numeric($col) && (string) (int) $col === (string) $col)) {
+                $errors[] = "markers[{$index}].col must be an integer.";
+
+                continue;
+            }
+            $row = (int) $row;
+            $col = (int) $col;
+
+            if ($row < 0 || $row >= $cellRows || $col < 0 || $col >= $cellCols) {
+                $errors[] = "markers[{$index}] is out of bounds for the terrain grid.";
+
+                continue;
+            }
+
+            $key = "{$row},{$col}";
+            if (isset($occupied[$key])) {
+                $errors[] = 'Only one marker is allowed per cell.';
+
+                continue;
+            }
+            $occupied[$key] = true;
+
+            $terrain = $cells[$row][$col] ?? null;
+            if (! is_string($terrain) || ! TerrainCatalog::isValid($terrain)) {
+                $errors[] = "markers[{$index}] sits on invalid terrain.";
+
+                continue;
             }
         }
 

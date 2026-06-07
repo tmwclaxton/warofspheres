@@ -5,16 +5,22 @@ import {
     MAP_EDITOR_CELL_PX,
     MAP_MAX_TEAMS,
     MAP_MIN_TEAMS,
+    defaultTeamPaletteSlots,
     emptyMapPayload,
     isAllowedMapGridSize,
     normalizeMapPayload,
+    normalizeTeamPaletteSlots,
     validateMapGridData,
-    validateMapMarkers,
 } from '@/lib/mapEditorGrid';
 import type { MapDataPayload, MapMarker } from '@/lib/mapEditorGrid';
-import { computeMinSeparationForMapState, manhattanDistance } from '@/lib/mapMarkerSpacing';
 import { isFarEnoughFromHydraulicWaterForMapMarker, isPlaceableTerrain } from '@/lib/mapMarkers';
+import {
+    computeMinSeparationForMapState,
+    countPlaceableLandCells,
+    manhattanDistance,
+} from '@/lib/mapMarkerSpacing';
 import type { TerrainId } from '@/lib/terrainCatalog';
+import { randomWackyMapName } from '@/lib/wackyMapName';
 import mapsRoutes, { destroy as destroyMap, show, store, update } from '@/routes/maps';
 
 export type MapEditorTool = 'brush' | 'eraser' | 'fill' | 'pan' | 'capital' | 'flag';
@@ -33,6 +39,7 @@ type EditorSnapshot = {
     cells: string[][];
     markers: MapMarker[];
     teamCount: number;
+    teamPaletteSlots: number[];
 };
 
 const MAX_UNDO = 50;
@@ -111,10 +118,13 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
     const cells = ref<string[][]>(cloneCells(initialNormalized.cells));
     const teamCount = ref(initialNormalized.teamCount ?? MAP_MIN_TEAMS);
     const markers = ref<MapMarker[]>(cloneMarkerList(initialNormalized.markers ?? []));
+    const teamPaletteSlots = ref<number[]>(
+        normalizeTeamPaletteSlots(teamCount.value, initialNormalized.teamPaletteSlots),
+    );
     /** `null` when painting terrain so the team strip does not look “armed” for markers. */
     const selectedTeam = ref<number | null>(null);
 
-    const mapName = ref('Untitled map');
+    const mapName = ref(randomWackyMapName());
     const currentUuid = shallowRef<string | null>(null);
     const dirty = ref(false);
     const activeTool = ref<MapEditorTool>('brush');
@@ -198,6 +208,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
             cells: cloneCells(cells.value),
             markers: cloneMarkerList(markers.value),
             teamCount: teamCount.value,
+            teamPaletteSlots: [...teamPaletteSlots.value],
         });
 
         if (undoStack.value.length > MAX_UNDO) {
@@ -245,10 +256,12 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
             cells: cloneCells(cells.value),
             markers: cloneMarkerList(markers.value),
             teamCount: teamCount.value,
+            teamPaletteSlots: [...teamPaletteSlots.value],
         });
         cells.value = prev.cells;
         markers.value = cloneMarkerList(prev.markers);
         teamCount.value = prev.teamCount;
+        teamPaletteSlots.value = [...prev.teamPaletteSlots];
         clampSelectedTeamToTeamCount();
         dirty.value = true;
         bumpTerrainRender();
@@ -266,10 +279,12 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
             cells: cloneCells(cells.value),
             markers: cloneMarkerList(markers.value),
             teamCount: teamCount.value,
+            teamPaletteSlots: [...teamPaletteSlots.value],
         });
         cells.value = next.cells;
         markers.value = cloneMarkerList(next.markers);
         teamCount.value = next.teamCount;
+        teamPaletteSlots.value = [...next.teamPaletteSlots];
         clampSelectedTeamToTeamCount();
         dirty.value = true;
         bumpTerrainRender();
@@ -409,6 +424,17 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
             return;
         }
 
+        const existingOnCell = markers.value.find((m) => m.row === gx && m.col === gy);
+
+        if (existingOnCell?.type === 'flag') {
+            snapshot();
+            markers.value = markers.value.filter((m) => !(m.row === gx && m.col === gy));
+            dirty.value = true;
+            bumpMarkersRender();
+
+            return;
+        }
+
         snapshot();
         const team = selectedTeam.value ?? 0;
         markers.value = markers.value.filter(
@@ -438,7 +464,18 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
             return;
         }
 
-        if (markers.value.some((m) => m.row === gx && m.col === gy)) {
+        const existingOnCell = markers.value.find((m) => m.row === gx && m.col === gy);
+
+        if (existingOnCell?.type === 'flag') {
+            snapshot();
+            markers.value = markers.value.filter((m) => !(m.row === gx && m.col === gy));
+            dirty.value = true;
+            bumpMarkersRender();
+
+            return;
+        }
+
+        if (existingOnCell) {
             return;
         }
 
@@ -446,7 +483,18 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
             .filter((m) => m.type === 'capital')
             .map((m) => ({ row: m.row, col: m.col }));
         const flagCount = markers.value.filter((m) => m.type === 'flag').length;
-        const flagBudget = Math.max(flagCount + 1, teamCount.value * 2, 1);
+        const nLand = countPlaceableLandCells(cells.value, gridRows.value, gridCols.value);
+        /**
+         * {@link computeMinSeparationForMapState} grows spacing when {@link flagBudget} is small
+         * (few flags planned), which made the first couple of manual flags nearly impossible to add.
+         * Assume a denser eventual layout while editing; save-time validation still enforces the
+         * real rules for the final marker set.
+         */
+        const flagBudget = Math.max(
+            flagCount + 1,
+            teamCount.value * 2,
+            Math.min(320, Math.max(48, Math.floor(nLand / 3))),
+        );
         const sep = computeMinSeparationForMapState({
             cells: cells.value,
             rows: gridRows.value,
@@ -486,16 +534,16 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
     function resetDocumentFromPayload(payload: MapDataPayload): void {
         const n = normalizeMapPayload(payload);
         cells.value = cloneCells(n.cells);
-        teamCount.value = n.teamCount ?? MAP_MIN_TEAMS;
+        const tc = n.teamCount ?? MAP_MIN_TEAMS;
+        teamCount.value = tc;
         markers.value = cloneMarkerList(n.markers ?? []);
+        teamPaletteSlots.value = normalizeTeamPaletteSlots(tc, n.teamPaletteSlots);
         selectedTeam.value = null;
     }
 
     function newMap(): void {
         resetDocumentFromPayload(initialDefaults);
-        teamCount.value = MAP_MIN_TEAMS;
-        selectedTeam.value = null;
-        mapName.value = 'Untitled map';
+        mapName.value = randomWackyMapName();
         currentUuid.value = null;
         dirty.value = false;
         undoStack.value = [];
@@ -510,12 +558,8 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
             return;
         }
 
-        const payload = emptyMapPayload(cellRows, cellCols);
-        cells.value = cloneCells(payload.cells);
-        teamCount.value = MAP_MIN_TEAMS;
-        markers.value = cloneMarkerList(payload.markers ?? []);
-        selectedTeam.value = null;
-        mapName.value = 'Untitled map';
+        resetDocumentFromPayload(emptyMapPayload(cellRows, cellCols));
+        mapName.value = randomWackyMapName();
         currentUuid.value = null;
         dirty.value = false;
         undoStack.value = [];
@@ -536,11 +580,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
             return;
         }
 
-        const n = normalizeMapPayload(payload);
-        cells.value = cloneCells(n.cells);
-        teamCount.value = n.teamCount ?? MAP_MIN_TEAMS;
-        markers.value = cloneMarkerList(n.markers ?? []);
-        selectedTeam.value = null;
+        resetDocumentFromPayload(payload);
         mapName.value = name;
         currentUuid.value = uuid;
         dirty.value = false;
@@ -575,18 +615,17 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
             cells: cloneCells(cells.value),
             teamCount: teamCount.value,
             markers: cloneMarkerList(markers.value),
+            teamPaletteSlots: [...teamPaletteSlots.value],
         };
     }
 
     async function saveMap(): Promise<MapListSummary[] | null> {
         const data = getDataPayload();
-        const markerErrors = validateMapMarkers(data);
+        const name = mapName.value.trim() || randomWackyMapName();
 
-        if (markerErrors.length > 0) {
-            throw new Error(markerErrors.join('\n'));
+        if (!mapName.value.trim()) {
+            mapName.value = name;
         }
-
-        const name = mapName.value.trim() || 'Untitled map';
 
         if (currentUuid.value) {
             const res = await jsonFetch(update.url(currentUuid.value), {
@@ -664,12 +703,18 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         ) {
             teamCount.value = payload.teamCount;
             markers.value = cloneMarkerList(payload.markers);
+            teamPaletteSlots.value = normalizeTeamPaletteSlots(
+                payload.teamCount,
+                payload.teamPaletteSlots,
+            );
         } else {
             teamCount.value = MAP_MIN_TEAMS;
             markers.value = [];
+            teamPaletteSlots.value = defaultTeamPaletteSlots(MAP_MIN_TEAMS);
         }
 
         selectedTeam.value = null;
+        mapName.value = randomWackyMapName();
         dirty.value = true;
         bumpTerrainRender();
         bumpMarkersRender();
@@ -687,6 +732,16 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         );
     }
 
+    function nextUnusedPaletteSlot(used: readonly number[]): number {
+        for (let s = 0; s < MAP_MAX_TEAMS; s++) {
+            if (!used.includes(s)) {
+                return s;
+            }
+        }
+
+        return MAP_MAX_TEAMS - 1;
+    }
+
     function setTeamCount(next: number): void {
         let n = Math.round(next);
 
@@ -701,8 +756,22 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         }
 
         snapshot();
+        const prev = teamCount.value;
         teamCount.value = n;
         markers.value = markers.value.filter((m) => m.team < n);
+
+        if (n < prev) {
+            teamPaletteSlots.value = teamPaletteSlots.value.slice(0, n);
+        } else if (n > prev) {
+            const slots = [...teamPaletteSlots.value];
+
+            while (slots.length < n) {
+                slots.push(nextUnusedPaletteSlot(slots));
+            }
+
+            teamPaletteSlots.value = slots;
+        }
+
         clampSelectedTeamToTeamCount();
         dirty.value = true;
         bumpMarkersRender();
@@ -710,7 +779,8 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
 
     /**
      * Removes one team slot: deletes that team's markers and decrements {@link teamCount},
-     * remapping higher team indices down by one (so colour slots stay contiguous).
+     * remapping higher team indices down by one. {@link teamPaletteSlots} is spliced in parallel
+     * so surviving teams keep their faction colours.
      */
     function removeTeamAtSlot(slot: number): void {
         if (teamCount.value <= MAP_MIN_TEAMS) {
@@ -726,6 +796,9 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
             .filter((m) => m.team !== slot)
             .map((m) => (m.team > slot ? { ...m, team: m.team - 1 } : m));
         teamCount.value -= 1;
+        const nextSlots = [...teamPaletteSlots.value];
+        nextSlots.splice(slot, 1);
+        teamPaletteSlots.value = nextSlots;
 
         if (selectedTeam.value === slot) {
             selectedTeam.value = null;
@@ -756,6 +829,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         cells,
         teamCount,
         markers,
+        teamPaletteSlots,
         selectedTeam,
         mapName,
         currentUuid,

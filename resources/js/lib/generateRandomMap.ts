@@ -2,6 +2,7 @@ import { buildMarkersForGeneratedTerrain } from '@/lib/generateMapMarkers';
 import {
     DEFAULT_MAP_CELL_COLS,
     DEFAULT_MAP_CELL_ROWS,
+    defaultTeamPaletteSlots,
     isAllowedMapGridSize,
 } from '@/lib/mapEditorGrid';
 import type { MapMarker } from '@/lib/mapEditorGrid';
@@ -16,6 +17,7 @@ export type GeneratedMapData = {
     cells: string[][];
     teamCount?: number;
     markers?: MapMarker[];
+    teamPaletteSlots?: number[];
 };
 
 export type MapGenerationType = 'mix' | 'islands' | 'desert' | 'mountains';
@@ -1518,5 +1520,6 @@ export function generateRandomMap(options: MapGenerationOptions = {}): Generated
         cells,
         teamCount,
         markers,
+        teamPaletteSlots: defaultTeamPaletteSlots(teamCount),
     };
 }

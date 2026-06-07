@@ -12,7 +12,14 @@ const props = defineProps<{
 }>();
 
 function hexForTeam(team: number): string {
-    return props.teamColors.find((c) => c.slot === team)?.hex ?? '#888888';
+    const slots = props.editor.teamPaletteSlots.value;
+    const paletteSlot = slots[team];
+
+    if (typeof paletteSlot !== 'number' || !Number.isInteger(paletteSlot)) {
+        return props.teamColors.find((c) => c.slot === team)?.hex ?? '#888888';
+    }
+
+    return props.teamColors.find((c) => c.slot === paletteSlot)?.hex ?? '#888888';
 }
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
@@ -106,11 +113,11 @@ const placementHint = computed(() => {
     const t = props.editor.activeTool.value;
 
     if (t === 'capital') {
-        return 'Click land to place or move this team’s capital.';
+        return 'Click land to place or move this team’s capital. Click a flag to remove it.';
     }
 
     if (t === 'flag') {
-        return 'Click land to place a flag for this team.';
+        return 'Click land to place a flag for this team. Click an existing flag to remove it.';
     }
 
     return '';
@@ -453,6 +460,7 @@ watch(
     () => [
         props.editor.terrainEpoch.value,
         props.editor.markersEpoch.value,
+        props.editor.teamPaletteSlots.value,
         props.editor.zoom.value,
         props.editor.camX.value,
         props.editor.camY.value,

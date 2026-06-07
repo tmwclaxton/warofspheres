@@ -1,10 +1,10 @@
 <script setup lang="ts">
+import { FilePlus2, Trash2 } from 'lucide-vue-next';
 import { computed, ref } from 'vue';
 import AppModal from '@/components/AppModal.vue';
-import type { MapEditorInstance } from '@/composables/useMapEditor';
 import { Button } from '@/components/ui/button';
+import type { MapEditorInstance } from '@/composables/useMapEditor';
 import { cn } from '@/lib/utils';
-import { FilePlus2, Trash2 } from 'lucide-vue-next';
 
 export type MapSummary = {
     id: number;
@@ -21,9 +21,9 @@ const props = defineProps<{
 const emit = defineEmits<{
     requestNewMap: [];
     mapsListUpdated: [maps: MapSummary[]];
+    openMap: [uuid: string];
 }>();
 
-const loadingUuid = ref<string | null>(null);
 const error = ref<string | null>(null);
 const deleteDialogOpen = ref(false);
 const deleteDialogMap = ref<{ uuid: string; name: string } | null>(null);
@@ -35,25 +35,15 @@ const deleteDialogDescription = computed(() => {
     return `Delete “${name}”? This cannot be undone.`;
 });
 
-async function openMap(uuid: string): Promise<void> {
-    if (props.editor.currentUuid.value === uuid && !props.editor.dirty.value) {
-        return;
-    }
+function openMap(uuid: string): void {
     if (
         props.editor.dirty.value
         && !window.confirm('Discard unsaved changes and open this map?')
     ) {
         return;
     }
-    error.value = null;
-    loadingUuid.value = uuid;
-    try {
-        await props.editor.loadMap(uuid);
-    } catch {
-        error.value = 'Could not load map.';
-    } finally {
-        loadingUuid.value = null;
-    }
+
+    emit('openMap', uuid);
 }
 
 function requestNewMap(): void {
@@ -97,6 +87,7 @@ function formatUpdated(iso: string | null): string {
     if (!iso) {
         return '—';
     }
+
     try {
         return new Date(iso).toLocaleString(undefined, {
             dateStyle: 'medium',
@@ -124,7 +115,7 @@ function formatUpdated(iso: string | null): string {
         <p v-if="error" class="text-xs text-destructive">{{ error }}</p>
         <ul class="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-0.5 text-sm">
             <li v-if="maps.length === 0" class="px-1 py-2 text-xs text-muted-foreground">
-                No saved maps yet. Paint terrain, then Save.
+                No saved maps yet. Paint terrain — maps autosave while you work.
             </li>
             <li v-for="m in maps" :key="m.uuid">
                 <div
@@ -137,8 +128,7 @@ function formatUpdated(iso: string | null): string {
                 >
                     <button
                         type="button"
-                        class="min-w-0 flex-1 truncate rounded px-1 py-1 text-left text-xs font-medium hover:bg-muted/80 disabled:opacity-50"
-                        :disabled="loadingUuid === m.uuid"
+                        class="min-w-0 flex-1 truncate rounded px-1 py-1 text-left text-xs font-medium hover:bg-muted/80"
                         :title="m.name"
                         @click="openMap(m.uuid)"
                     >

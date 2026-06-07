@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Head } from '@inertiajs/vue3';
+import { Head, router, usePage } from '@inertiajs/vue3';
 import { Flag, Landmark, Redo2, Save, Sparkles, Undo2 } from 'lucide-vue-next';
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import AppModal from '@/components/AppModal.vue';
@@ -26,13 +26,21 @@ import {
     MAP_GRID_MIN_CELL_ROWS,
     isAllowedMapGridSize,
 } from '@/lib/mapEditorGrid';
+import { mapBuilder } from '@/routes';
 import { useToastStore } from '@/stores/toastStore';
+
+export type MapBuilderInitialDocument = {
+    uuid: string;
+    name: string;
+    data: MapDataPayload;
+};
 
 const props = defineProps<{
     maps: MapSummary[];
     terrainTypes: TerrainTypeRow[];
     teamColors: TeamColorRow[];
     defaults: MapDataPayload;
+    initialDocument: MapBuilderInitialDocument | null;
 }>();
 
 const teamCountOptions = [2, 3, 4, 5, 6] as const;
@@ -50,11 +58,153 @@ watch(
     { deep: true },
 );
 
+const page = usePage();
+
+const AUTO_SAVE_DEBOUNCE_MS = 3500;
+
+const autoSaving = ref(false);
+let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function currentPathname(): string {
+    return new URL(
+        page.url,
+        typeof window !== 'undefined' ? window.location.origin : 'http://localhost',
+    ).pathname;
+}
+
+function pathMatchesMapSlug(uuid: string | null): boolean {
+    const path = currentPathname();
+
+    if (uuid === null) {
+        return path === '/map-builder';
+    }
+
+    return path === `/map-builder/${uuid}`;
+}
+
+function visitMapBuilder(uuid: string | null, options: { replace?: boolean } = {}): void {
+    const url = uuid ? mapBuilder.url(uuid) : mapBuilder.url();
+
+    router.visit(url, {
+        preserveState: true,
+        preserveScroll: true,
+        replace: options.replace ?? false,
+    });
+}
+
+function syncSlugToCurrentMapIfNeeded(options: { replace?: boolean } = {}): void {
+    const uuid = editor.currentUuid.value;
+
+    if (!uuid || pathMatchesMapSlug(uuid)) {
+        return;
+    }
+
+    visitMapBuilder(uuid, { replace: options.replace ?? true });
+}
+
+watch(
+    () => props.initialDocument?.uuid ?? null,
+    (uuid, prevUuid) => {
+        const doc = props.initialDocument;
+
+        if (doc?.uuid) {
+            editor.loadFromPayload(doc.data, doc.name, doc.uuid);
+
+            return;
+        }
+
+        if (prevUuid != null && !uuid) {
+            editor.newMap();
+        }
+    },
+    { immediate: true },
+);
+
+watch(
+    () => [editor.currentUuid.value, page.url, props.initialDocument?.uuid ?? null] as const,
+    ([uuid, , slugProp]) => {
+        if (uuid !== null) {
+            return;
+        }
+
+        const path = currentPathname();
+
+        if (!path.startsWith('/map-builder/') || path === '/map-builder') {
+            return;
+        }
+
+        const match = path.match(/^\/map-builder\/([^/]+)$/);
+
+        if (match?.[1] && slugProp && match[1] === slugProp) {
+            return;
+        }
+
+        visitMapBuilder(null, { replace: true });
+    },
+);
+
+function onOpenMapFromList(uuid: string): void {
+    if (
+        editor.currentUuid.value === uuid
+        && !editor.dirty.value
+        && pathMatchesMapSlug(uuid)
+    ) {
+        return;
+    }
+
+    visitMapBuilder(uuid);
+}
+
 /** Native &lt;select&gt; needs a primitive; nested refs on `editor` are not auto-unwrapped in templates. */
 const headerTeamCount = computed(() => editor.teamCount.value);
 const zoomPercent = computed(() => Math.round(editor.zoom.value * 100));
 const editorDirty = computed(() => editor.dirty.value);
 const saving = ref(false);
+
+async function runAutoSave(): Promise<void> {
+    if (!editor.dirty.value || saving.value || autoSaving.value) {
+        return;
+    }
+
+    autoSaving.value = true;
+
+    try {
+        const updated = await editor.saveMap();
+
+        if (updated) {
+            mapsList.value = updated;
+        }
+
+        syncSlugToCurrentMapIfNeeded({ replace: true });
+    } catch (err) {
+        const message =
+            err instanceof Error
+                ? err.message
+                : 'Autosave failed. Check your connection and try again.';
+        toast.error(message, 9000);
+    } finally {
+        autoSaving.value = false;
+    }
+}
+
+watch(
+    () => editor.dirty.value,
+    (dirty) => {
+        if (!dirty) {
+            return;
+        }
+
+        if (autoSaveTimer !== null) {
+            clearTimeout(autoSaveTimer);
+        }
+
+        autoSaveTimer = setTimeout(() => {
+            autoSaveTimer = null;
+            void runAutoSave();
+        }, AUTO_SAVE_DEBOUNCE_MS);
+    },
+);
+
 const generateDialogOpen = ref(false);
 const newMapDialogOpen = ref(false);
 const newMapRows = ref(DEFAULT_MAP_CELL_ROWS);
@@ -65,10 +215,16 @@ const newMapRowsInputRef = ref<HTMLInputElement | null>(null);
 const teamMarkerDialogOpen = ref(false);
 const teamMarkerDialogSlot = ref(0);
 
-const teamMarkerDialogLabel = computed(() => {
-    const row = props.teamColors.find((c) => c.slot === teamMarkerDialogSlot.value);
+function factionRowForTeamIndex(teamIndex: number): TeamColorRow | undefined {
+    const ps = editor.teamPaletteSlots.value[teamIndex] ?? teamIndex;
 
-    return row?.label ?? `Team ${teamMarkerDialogSlot.value + 1}`;
+    return props.teamColors.find((c) => c.slot === ps);
+}
+
+const teamMarkerDialogLabel = computed(() => {
+    const ti = teamMarkerDialogSlot.value;
+
+    return factionRowForTeamIndex(ti)?.label ?? `Team ${ti + 1}`;
 });
 
 const teamMarkerDialogDescription = computed(
@@ -91,46 +247,29 @@ function applyTeamMarkerTool(tool: 'capital' | 'flag'): void {
     teamMarkerDialogOpen.value = false;
 }
 
-const removeTeamDialogOpen = ref(false);
-const removeTeamDialogSlot = ref(0);
-
-const removeTeamDialogLabel = computed(() => {
-    const row = props.teamColors.find((c) => c.slot === removeTeamDialogSlot.value);
-
-    return row?.label ?? `Team ${removeTeamDialogSlot.value + 1}`;
-});
-
-const removeTeamDialogDescription = computed(
-    () =>
-        `This removes ${removeTeamDialogLabel.value} and all of that team’s capitals and flags. Remaining teams are renumbered into lower slots. You can Undo if this was a mistake.`,
-);
-
+/**
+ * Remove one team by palette slot. Uses the slot argument synchronously (no modal ref) so
+ * the deleted team always matches the swatch you clicked (e.g. red → slot 0).
+ */
 function onRequestRemoveTeam(slot: number): void {
-    const n = Number(slot);
+    const n = Math.trunc(Number(slot));
 
-    if (!Number.isInteger(n) || n < 0) {
+    if (!Number.isInteger(n) || n < 0 || n >= editor.teamCount.value) {
         return;
     }
 
-    removeTeamDialogSlot.value = n;
-    removeTeamDialogOpen.value = true;
-}
+    const row = factionRowForTeamIndex(n);
+    const label = row?.label ?? `Team ${n + 1}`;
 
-function closeRemoveTeamDialog(): void {
-    removeTeamDialogOpen.value = false;
-}
-
-function confirmRemoveTeam(): void {
-    const slot = removeTeamDialogSlot.value;
-
-    if (!Number.isInteger(slot) || slot < 0) {
-        removeTeamDialogOpen.value = false;
-
+    if (
+        !window.confirm(
+            `Remove the ${label} team? Their capital and flags will be removed, and remaining teams will be renumbered. You can Undo.`,
+        )
+    ) {
         return;
     }
 
-    editor.removeTeamAtSlot(slot);
-    removeTeamDialogOpen.value = false;
+    editor.removeTeamAtSlot(n);
 }
 
 function onRequestNewMap(): void {
@@ -173,6 +312,7 @@ function submitNewMapDialog(): void {
 
     editor.newMapWithSize(rows, cols);
     newMapDialogOpen.value = false;
+    visitMapBuilder(null, { replace: true });
 }
 
 function openGenerateDialog(): void {
@@ -181,10 +321,6 @@ function openGenerateDialog(): void {
 
 function onGenerateMap(payload: { seed?: number; type: MapGenerationType }): void {
     editor.generateAndApplyMap(payload.seed, payload.type);
-
-    if (editor.mapName.value === 'Untitled map') {
-        editor.mapName.value = 'Generated map';
-    }
 }
 
 async function onSave(): Promise<void> {
@@ -196,6 +332,8 @@ async function onSave(): Promise<void> {
         if (updated) {
             mapsList.value = updated;
         }
+
+        syncSlugToCurrentMapIfNeeded({ replace: true });
 
         toast.success('Map saved.');
     } catch (err) {
@@ -235,6 +373,10 @@ onMounted(() => {
 
 onUnmounted(() => {
     window.removeEventListener('beforeunload', onBeforeUnload);
+
+    if (autoSaveTimer !== null) {
+        clearTimeout(autoSaveTimer);
+    }
 });
 </script>
 
@@ -337,11 +479,11 @@ onUnmounted(() => {
                     type="button"
                     size="sm"
                     class="gap-1"
-                    :disabled="saving"
+                    :disabled="saving || autoSaving"
                     @click="onSave"
                 >
                     <Save class="size-3.5" />
-                    {{ saving ? 'Saving…' : 'Save' }}
+                    {{ saving ? 'Saving…' : autoSaving ? 'Autosaving…' : 'Save' }}
                 </Button>
             </div>
         </div>
@@ -353,6 +495,7 @@ onUnmounted(() => {
                 :editor="editor"
                 :maps="mapsList"
                 @maps-list-updated="onMapsListUpdated"
+                @open-map="onOpenMapFromList"
                 @request-new-map="onRequestNewMap"
             />
             <MapEditorToolbar :editor="editor" />
@@ -393,21 +536,6 @@ onUnmounted(() => {
                 <Button type="button" variant="outline" @click="applyTeamMarkerTool('capital')">
                     <Landmark class="size-4" stroke-width="2" />
                     Capital
-                </Button>
-            </template>
-        </AppModal>
-
-        <AppModal
-            v-model:open="removeTeamDialogOpen"
-            title="Remove this team?"
-            :description="removeTeamDialogDescription"
-        >
-            <template #footer>
-                <Button type="button" variant="outline" @click="closeRemoveTeamDialog">
-                    Cancel
-                </Button>
-                <Button type="button" variant="destructive" @click="confirmRemoveTeam">
-                    Remove team
                 </Button>
             </template>
         </AppModal>

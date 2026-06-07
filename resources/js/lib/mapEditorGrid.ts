@@ -129,6 +129,11 @@ export type MapDataPayload = {
     cells: string[][];
     teamCount?: number;
     markers?: MapMarker[];
+    /**
+     * One entry per logical team index `0 .. teamCount - 1`: which palette slot (faction colour)
+     * that team uses. Survives team removal so e.g. “blue” markers stay blue after “red” is deleted.
+     */
+    teamPaletteSlots?: number[];
 };
 
 export function isAllowedMapGridSize(cellRows: number, cellCols: number): boolean {
@@ -175,6 +180,45 @@ function cloneMarker(m: MapMarker): MapMarker {
     return { type: m.type, team: m.team, row: m.row, col: m.col };
 }
 
+/** Identity mapping: logical team `i` uses palette slot `i`. */
+export function defaultTeamPaletteSlots(teamCount: number): number[] {
+    return Array.from({ length: teamCount }, (_, i) => i);
+}
+
+/**
+ * Normalizes {@link MapDataPayload.teamPaletteSlots}: length === teamCount, unique ints in
+ * `[0, MAP_MAX_TEAMS - 1]`. Falls back to identity when missing or invalid.
+ */
+export function normalizeTeamPaletteSlots(teamCount: number, raw: unknown): number[] {
+    const identity = (): number[] => defaultTeamPaletteSlots(teamCount);
+
+    if (!Number.isInteger(teamCount) || teamCount < MAP_MIN_TEAMS || teamCount > MAP_MAX_TEAMS) {
+        return defaultTeamPaletteSlots(MAP_MIN_TEAMS);
+    }
+
+    if (!Array.isArray(raw) || raw.length !== teamCount) {
+        return identity();
+    }
+
+    const out: number[] = [];
+
+    for (let i = 0; i < teamCount; i++) {
+        const v = Math.trunc(Number(raw[i]));
+
+        if (!Number.isInteger(v) || v < 0 || v >= MAP_MAX_TEAMS) {
+            return identity();
+        }
+
+        out.push(v);
+    }
+
+    if (new Set(out).size !== out.length) {
+        return identity();
+    }
+
+    return out;
+}
+
 /**
  * Upgrade v1 terrain-only payloads for the editor (v2 in memory).
  */
@@ -189,19 +233,23 @@ export function normalizeMapPayload(raw: MapDataPayload): MapDataPayload {
             cells: raw.cells,
             teamCount: MAP_MIN_TEAMS,
             markers: [],
+            teamPaletteSlots: defaultTeamPaletteSlots(MAP_MIN_TEAMS),
         };
     }
+
+    const teamCount =
+        typeof raw.teamCount === 'number' && Number.isInteger(raw.teamCount)
+            ? raw.teamCount
+            : MAP_MIN_TEAMS;
 
     return {
         version: 2,
         cellRows: raw.cellRows,
         cellCols: raw.cellCols,
         cells: raw.cells,
-        teamCount:
-            typeof raw.teamCount === 'number' && Number.isInteger(raw.teamCount)
-                ? raw.teamCount
-                : MAP_MIN_TEAMS,
+        teamCount,
         markers: Array.isArray(raw.markers) ? raw.markers.map(cloneMarker) : [],
+        teamPaletteSlots: normalizeTeamPaletteSlots(teamCount, raw.teamPaletteSlots),
     };
 }
 
@@ -230,11 +278,60 @@ export function emptyMapPayload(cellRows: number, cellCols: number): EmptyMapPay
         cells,
         teamCount: MAP_MIN_TEAMS,
         markers: [],
+        teamPaletteSlots: defaultTeamPaletteSlots(MAP_MIN_TEAMS),
     };
 }
 
 /**
- * Client-side marker validation (mirrors App\Maps\MapMarkers::validate).
+ * When `teamPaletteSlots` is present it must be valid. Omitted keys are accepted for legacy data.
+ */
+export function validateTeamPaletteSlotsArray(teamCount: number, raw: unknown): string[] {
+    const errors: string[] = [];
+
+    if (raw === undefined || raw === null) {
+        return errors;
+    }
+
+    if (!Array.isArray(raw)) {
+        errors.push('teamPaletteSlots must be an array.');
+
+        return errors;
+    }
+
+    if (raw.length !== teamCount) {
+        errors.push(`teamPaletteSlots must have length ${teamCount} (same as teamCount).`);
+
+        return errors;
+    }
+
+    const out: number[] = [];
+
+    for (let i = 0; i < teamCount; i++) {
+        const v = Math.trunc(Number(raw[i]));
+
+        if (!Number.isInteger(v) || v < 0 || v >= MAP_MAX_TEAMS) {
+            errors.push(
+                `teamPaletteSlots[${i}] must be an integer between 0 and ${MAP_MAX_TEAMS - 1}.`,
+            );
+
+            return errors;
+        }
+
+        out.push(v);
+    }
+
+    if (new Set(out).size !== out.length) {
+        errors.push('teamPaletteSlots must use each palette colour at most once (no duplicates).');
+
+        return errors;
+    }
+
+    return errors;
+}
+
+/**
+ * Client-side marker validation (mirrors App\Maps\MapMarkers::validate for editor placement;
+ * save uses MapMarkers::validatePersistable only).
  */
 export function validateMapMarkers(data: MapDataPayload): string[] {
     const errors: string[] = [];
@@ -245,6 +342,16 @@ export function validateMapMarkers(data: MapDataPayload): string[] {
 
         return errors;
     }
+
+    errors.push(...validateTeamPaletteSlotsArray(teamCount, data.teamPaletteSlots));
+
+    if (errors.length > 0) {
+        return errors;
+    }
+
+    const teamPaletteSlots = normalizeTeamPaletteSlots(teamCount, data.teamPaletteSlots);
+    const labelForTeam = (t: number): string =>
+        FACTION_LABELS[teamPaletteSlots[t] ?? t] ?? `team ${t}`;
 
     const markers = data.markers ?? [];
 
@@ -339,7 +446,7 @@ export function validateMapMarkers(data: MapDataPayload): string[] {
 
         if (type === 'capital') {
             if (capitalsByTeam.has(team)) {
-                errors.push(`Team ${team} has more than one capital.`);
+                errors.push(`${labelForTeam(team)} has more than one capital.`);
 
                 continue;
             }
@@ -384,7 +491,7 @@ export function validateMapMarkers(data: MapDataPayload): string[] {
     const maxFlags = Math.max(...flagCounts);
 
     if (minFlags !== maxFlags) {
-        const parts = flagCounts.map((n, t) => `${FACTION_LABELS[t] ?? `team ${t}`}: ${n}`).join(', ');
+        const parts = flagCounts.map((n, t) => `${labelForTeam(t)}: ${n}`).join(', ');
         errors.push(`Each team must have the same number of flags (current counts: ${parts}).`);
     }
 
@@ -392,7 +499,7 @@ export function validateMapMarkers(data: MapDataPayload): string[] {
 
     for (let t = 0; t < teamCount; t++) {
         if (!capitalsByTeam.has(t)) {
-            missing.push(FACTION_LABELS[t] ?? `team ${t}`);
+            missing.push(labelForTeam(t));
         }
     }
 

@@ -16,8 +16,15 @@ use Inertia\Response as InertiaResponse;
 
 class MapController extends Controller
 {
-    public function builder(): InertiaResponse
+    /**
+     * Map editor. Optional {@link Map} UUID in the path reloads that map (same as choosing it in the sidebar).
+     */
+    public function builder(?Map $map = null): InertiaResponse
     {
+        if ($map !== null) {
+            Gate::authorize('view', $map);
+        }
+
         $maps = Map::query()
             ->where('user_id', auth()->id())
             ->orderByDesc('updated_at')
@@ -28,6 +35,11 @@ class MapController extends Controller
             'terrainTypes' => TerrainCatalog::forClient(),
             'teamColors' => MapMarkers::teamColorsForClient(),
             'defaults' => MapEditorGrid::emptyData(),
+            'initialDocument' => $map === null ? null : [
+                'uuid' => $map->uuid,
+                'name' => $map->name,
+                'data' => $map->data,
+            ],
         ]);
     }
 

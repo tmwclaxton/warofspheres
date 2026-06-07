@@ -39,9 +39,22 @@ function onTeamButtonClick(slot: number): void {
     emit('needMarkerTool', slot);
 }
 
-const visibleTeams = computed(() =>
-    props.teamColors.filter((c) => c.slot < props.editor.teamCount.value),
-);
+const visibleTeamRows = computed(() => {
+    const n = props.editor.teamCount.value;
+    const slots = props.editor.teamPaletteSlots.value;
+    const out: { teamIndex: number; colorRow: TeamColorRow }[] = [];
+
+    for (let i = 0; i < n; i++) {
+        const ps = slots[i] ?? i;
+        const colorRow = props.teamColors.find((c) => c.slot === ps);
+
+        if (colorRow) {
+            out.push({ teamIndex: i, colorRow });
+        }
+    }
+
+    return out;
+});
 
 const canAddTeam = computed(() => props.editor.teamCount.value < MAP_MAX_TEAMS);
 
@@ -55,21 +68,17 @@ function addTeam(): void {
     props.editor.setTeamCount(props.editor.teamCount.value + 1);
 }
 
-/**
- * Read team index from the clicked control so we never remove the wrong slot when
- * stacked/overlapping hit targets compete (e.g. coarse pointer + shared z-index).
- */
-function onRemoveTeamButtonClick(ev: MouseEvent): void {
-    ev.preventDefault();
-    ev.stopPropagation();
-    const raw = (ev.currentTarget as HTMLButtonElement | null)?.dataset.teamSlot;
-    const slot = raw === undefined ? NaN : Number.parseInt(raw, 10);
-
-    if (!Number.isInteger(slot) || slot < 0) {
+/** `teamIndex` is contiguous logical team; colour/label come from {@link teamPaletteSlots}. */
+function removeTeamForSlot(teamIndex: number): void {
+    if (
+        !Number.isInteger(teamIndex)
+        || teamIndex < 0
+        || teamIndex >= props.editor.teamCount.value
+    ) {
         return;
     }
 
-    emit('requestRemoveTeam', slot);
+    emit('requestRemoveTeam', teamIndex);
 }
 </script>
 
@@ -88,12 +97,12 @@ function onRemoveTeamButtonClick(ev: MouseEvent): void {
         </p>
         <div class="flex flex-wrap gap-2">
             <div
-                v-for="c in visibleTeams"
-                :key="c.slot"
+                v-for="t in visibleTeamRows"
+                :key="`team-slot-${t.teamIndex}`"
                 :class="
                     cn(
-                        'flex min-w-[5.25rem] items-stretch gap-0.5 rounded-md border-2 p-1 text-[10px] font-medium capitalize transition-shadow',
-                        selectedTeamSlot !== null && selectedTeamSlot === c.slot
+                        'isolate flex min-w-[4.75rem] flex-col gap-1 rounded-md border-2 p-1.5 text-[10px] font-medium capitalize transition-shadow',
+                        selectedTeamSlot !== null && selectedTeamSlot === t.teamIndex
                             ? 'border-foreground ring-2 ring-foreground/20'
                             : 'border-transparent hover:border-muted-foreground/40',
                     )
@@ -101,28 +110,31 @@ function onRemoveTeamButtonClick(ev: MouseEvent): void {
             >
                 <button
                     type="button"
-                    class="flex min-w-0 flex-1 flex-col items-center gap-1 rounded-sm p-1 transition-colors hover:bg-muted/30"
-                    :title="`${c.label} — slot ${c.slot + 1}`"
-                    @click="onTeamButtonClick(c.slot)"
+                    class="flex w-full flex-col items-center gap-1 rounded-sm px-1 py-1 transition-colors hover:bg-muted/30"
+                    :title="`${t.colorRow.label} — team ${t.teamIndex + 1}`"
+                    @click="onTeamButtonClick(t.teamIndex)"
                 >
                     <span
                         class="size-8 shrink-0 rounded border-2 border-foreground/40 shadow-sm"
-                        :style="{ backgroundColor: c.hex }"
+                        :style="{ backgroundColor: t.colorRow.hex }"
                         aria-hidden="true"
                     />
-                    <span class="text-center text-muted-foreground">{{ c.label }}</span>
+                    <span class="text-center text-muted-foreground">{{ t.colorRow.label }}</span>
                 </button>
-                <button
+                <div
                     v-if="canRemoveTeam"
-                    type="button"
-                    class="flex w-7 shrink-0 flex-col items-center justify-start rounded-sm border border-transparent pt-0.5 text-foreground transition-colors hover:border-destructive/60 hover:bg-destructive hover:text-white"
-                    :data-team-slot="String(c.slot)"
-                    :title="`Remove ${c.label} team`"
-                    :aria-label="`Remove ${c.label} team`"
-                    @click="onRemoveTeamButtonClick"
+                    class="flex justify-center border-t border-foreground/15 pt-1"
                 >
-                    <X class="size-3.5" stroke-width="2.5" />
-                </button>
+                    <button
+                        type="button"
+                        class="inline-flex size-7 items-center justify-center rounded-md border-2 border-foreground/35 bg-wod-paper text-foreground shadow-sm transition-colors hover:border-destructive hover:bg-destructive hover:text-white"
+                        :title="`Remove ${t.colorRow.label} team`"
+                        :aria-label="`Remove ${t.colorRow.label} team`"
+                        @click.stop.prevent="removeTeamForSlot(t.teamIndex)"
+                    >
+                        <X class="pointer-events-none size-3.5" stroke-width="2.5" />
+                    </button>
+                </div>
             </div>
             <button
                 v-if="canAddTeam"

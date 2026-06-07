@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Route;
 Route::inertia('/', 'Welcome')->name('home');
 
 Route::middleware(['auth'])->group(function () {
-    Route::get('map-builder', [MapController::class, 'builder'])->name('map-builder');
+    Route::get('map-builder/{map?}', [MapController::class, 'builder'])->name('map-builder');
     Route::get('maps', [MapController::class, 'index'])->name('maps.index');
     Route::post('maps', [MapController::class, 'store'])->name('maps.store');
     Route::get('maps/{map}', [MapController::class, 'show'])->name('maps.show');

@@ -8,6 +8,7 @@ use App\Maps\MapMarkers;
 use App\Models\Map;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Inertia\Testing\AssertableInertia;
 use Tests\TestCase;
 
 class MapTest extends TestCase
@@ -34,6 +35,7 @@ class MapTest extends TestCase
                 'col' => 1,
             ],
         ];
+        $data['teamPaletteSlots'] = [0, 1];
 
         return $data;
     }
@@ -59,6 +61,44 @@ class MapTest extends TestCase
 
         $response->assertOk();
         $this->assertStringContainsString('MapBuilder', $response->getContent());
+    }
+
+    public function test_authenticated_user_can_open_map_builder_with_slug(): void
+    {
+        $user = User::factory()->create();
+        $map = Map::factory()->for($user)->create(['name' => 'Slugged map']);
+
+        $this->actingAs($user)
+            ->get(route('map-builder', ['map' => $map->uuid]))
+            ->assertOk()
+            ->assertInertia(fn (AssertableInertia $page) => $page
+                ->component('MapBuilder')
+                ->has('initialDocument')
+                ->where('initialDocument.uuid', $map->uuid)
+                ->where('initialDocument.name', 'Slugged map'));
+    }
+
+    public function test_map_builder_slug_returns_forbidden_for_another_users_map(): void
+    {
+        $owner = User::factory()->create();
+        $other = User::factory()->create();
+        $map = Map::factory()->for($owner)->create();
+
+        $this->actingAs($other)
+            ->get(route('map-builder', ['map' => $map->uuid]))
+            ->assertForbidden();
+    }
+
+    public function test_map_builder_without_slug_has_null_initial_document(): void
+    {
+        $user = User::factory()->create();
+
+        $this->actingAs($user)
+            ->get(route('map-builder'))
+            ->assertOk()
+            ->assertInertia(fn (AssertableInertia $page) => $page
+                ->component('MapBuilder')
+                ->where('initialDocument', null));
     }
 
     public function test_user_can_create_and_fetch_map(): void
@@ -195,6 +235,21 @@ class MapTest extends TestCase
         $this->assertSame(2, $data['version']);
         $this->assertSame(GameConstants::MIN_PLAYERS, $data['teamCount']);
         $this->assertSame([], $data['markers']);
+        $this->assertSame([0, 1], $data['teamPaletteSlots']);
+    }
+
+    public function test_store_v2_rejects_duplicate_team_palette_slots(): void
+    {
+        $user = User::factory()->create();
+        $data = $this->v2DataWithTwoCapitals(24, 18);
+        $data['teamPaletteSlots'] = [0, 0];
+
+        $this->actingAs($user)
+            ->postJson(route('maps.store'), [
+                'name' => 'Dup palette',
+                'data' => $data,
+            ])
+            ->assertUnprocessable();
     }
 
     public function test_store_accepts_version_1_without_markers(): void
@@ -215,6 +270,23 @@ class MapTest extends TestCase
             ])
             ->assertCreated()
             ->assertJsonPath('map.data.version', 1);
+    }
+
+    public function test_store_v2_persists_team_palette_slots(): void
+    {
+        $user = User::factory()->create();
+        $data = $this->v2DataWithTwoCapitals(24, 18);
+        $data['teamPaletteSlots'] = [2, 0];
+
+        $this->actingAs($user)
+            ->postJson(route('maps.store'), [
+                'name' => 'Palette order',
+                'data' => $data,
+            ])
+            ->assertCreated();
+
+        $map = Map::query()->where('user_id', $user->id)->firstOrFail();
+        $this->assertSame([2, 0], $map->data['teamPaletteSlots']);
     }
 
     public function test_store_v2_accepts_capitals_and_flags(): void
@@ -246,7 +318,7 @@ class MapTest extends TestCase
         $this->assertCount(4, $map->data['markers']);
     }
 
-    public function test_store_v2_rejects_missing_capital_for_team(): void
+    public function test_store_v2_accepts_incomplete_markers_as_draft(): void
     {
         $user = User::factory()->create();
         $data = $this->v2DataWithTwoCapitals(24, 18);
@@ -260,10 +332,10 @@ class MapTest extends TestCase
                 'name' => 'Incomplete',
                 'data' => $data,
             ])
-            ->assertUnprocessable();
+            ->assertCreated();
     }
 
-    public function test_store_v2_rejects_capital_on_water(): void
+    public function test_store_v2_accepts_capital_on_water_as_draft(): void
     {
         $user = User::factory()->create();
         $data = $this->v2DataWithTwoCapitals(24, 18);
@@ -274,10 +346,10 @@ class MapTest extends TestCase
                 'name' => 'Wet capital',
                 'data' => $data,
             ])
-            ->assertUnprocessable();
+            ->assertCreated();
     }
 
-    public function test_store_v2_rejects_capital_when_hydraulic_water_touches_marker_neighborhood(): void
+    public function test_store_v2_accepts_capital_near_water_as_draft(): void
     {
         $user = User::factory()->create();
         $data = $this->v2DataWithTwoCapitals(24, 18);
@@ -288,10 +360,10 @@ class MapTest extends TestCase
                 'name' => 'Shore capital',
                 'data' => $data,
             ])
-            ->assertUnprocessable();
+            ->assertCreated();
     }
 
-    public function test_store_v2_rejects_capital_on_hill(): void
+    public function test_store_v2_accepts_capital_on_hill_as_draft(): void
     {
         $user = User::factory()->create();
         $data = $this->v2DataWithTwoCapitals(24, 18);
@@ -302,10 +374,10 @@ class MapTest extends TestCase
                 'name' => 'High capital',
                 'data' => $data,
             ])
-            ->assertUnprocessable();
+            ->assertCreated();
     }
 
-    public function test_store_v2_rejects_flag_on_mountain(): void
+    public function test_store_v2_accepts_flag_on_mountain_as_draft(): void
     {
         $user = User::factory()->create();
         $data = $this->v2DataWithTwoCapitals(24, 18);
@@ -328,10 +400,10 @@ class MapTest extends TestCase
                 'name' => 'Peak flag',
                 'data' => $data,
             ])
-            ->assertUnprocessable();
+            ->assertCreated();
     }
 
-    public function test_store_v2_rejects_flag_adjacent_to_capital(): void
+    public function test_store_v2_accepts_flag_adjacent_to_capital_as_draft(): void
     {
         $user = User::factory()->create();
         $data = $this->v2DataWithTwoCapitals(24, 18);
@@ -353,7 +425,7 @@ class MapTest extends TestCase
                 'name' => 'Tight flag',
                 'data' => $data,
             ])
-            ->assertUnprocessable();
+            ->assertCreated();
     }
 
     public function test_store_v2_rejects_marker_team_outside_team_count(): void
@@ -375,7 +447,7 @@ class MapTest extends TestCase
             ->assertUnprocessable();
     }
 
-    public function test_store_v2_rejects_unequal_flags_per_team(): void
+    public function test_store_v2_accepts_unequal_flags_per_team_as_draft(): void
     {
         $user = User::factory()->create();
         $data = $this->v2DataWithTwoCapitals(24, 18);
@@ -391,10 +463,10 @@ class MapTest extends TestCase
                 'name' => 'Skewed flags',
                 'data' => $data,
             ])
-            ->assertUnprocessable();
+            ->assertCreated();
     }
 
-    public function test_store_v2_rejects_markers_split_by_mountain_wall(): void
+    public function test_store_v2_accepts_markers_split_by_mountain_wall_as_draft(): void
     {
         $user = User::factory()->create();
         $data = MapEditorGrid::emptyData(5, 5);
@@ -419,6 +491,45 @@ class MapTest extends TestCase
         $this->actingAs($user)
             ->postJson(route('maps.store'), [
                 'name' => 'Split map',
+                'data' => $data,
+            ])
+            ->assertCreated();
+    }
+
+    public function test_store_v2_rejects_marker_out_of_bounds(): void
+    {
+        $user = User::factory()->create();
+        $data = $this->v2DataWithTwoCapitals(24, 18);
+        $data['markers'][0]['row'] = 99;
+
+        $this->actingAs($user)
+            ->postJson(route('maps.store'), [
+                'name' => 'OOB',
+                'data' => $data,
+            ])
+            ->assertUnprocessable();
+    }
+
+    public function test_store_v2_rejects_two_markers_in_same_cell(): void
+    {
+        $user = User::factory()->create();
+        $data = $this->v2DataWithTwoCapitals(24, 18);
+        $data['markers'][] = [
+            'type' => MapMarkers::TYPE_FLAG,
+            'team' => 0,
+            'row' => 5,
+            'col' => 5,
+        ];
+        $data['markers'][] = [
+            'type' => MapMarkers::TYPE_FLAG,
+            'team' => 1,
+            'row' => 5,
+            'col' => 5,
+        ];
+
+        $this->actingAs($user)
+            ->postJson(route('maps.store'), [
+                'name' => 'Stacked',
                 'data' => $data,
             ])
             ->assertUnprocessable();
