@@ -102,15 +102,15 @@ jobs:
             ProxyCommand cloudflared access ssh --hostname %h
           EOF
 
-      - name: Upload compose file to server (mkdir + write in one SSH session)
+      - name: Upload compose file to server
         env:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           set -euo pipefail
-          REMOTE_DIR=$(printf '%q' "${{ env.DEPLOY_DIR }}")
+          R=$(printf '%q' "${{ env.DEPLOY_DIR }}")
           sed "s|__GHCR_IMAGE__|${IMAGE_REF}|g" compose.prod.yaml | ssh "${{ env.DEPLOY_HOST }}" \
-            "set -euo pipefail; mkdir -p -- ${REMOTE_DIR} && cat > ${REMOTE_DIR}/compose.prod.yaml"
+            "set -euo pipefail; cat > ${R}/compose.prod.yaml"
 
       - name: Deploy on server
         env:

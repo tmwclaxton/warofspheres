@@ -287,13 +287,13 @@ Workflow: [`.github/workflows/prod_deploy.yml`](.github/workflows/prod_deploy.ym
 
 ```bash
 ssh YOUR_USER@YOUR_HOST
-sudo mkdir -p /opt/warofspheres    # use the same path as DEPLOY_DIR
+sudo mkdir -p /opt/warofspheres    # same path as DEPLOY_DIR; skip if it already exists
 sudo chown YOUR_USER:YOUR_USER /opt/warofspheres
 cd /opt/warofspheres
 cp /path/to/.env.example .env     # edit: APP_URL, DB_*, WorkOS, Redis, Reverb, etc.
 ```
 
-The workflow also runs **`mkdir -p`** on `DEPLOY_DIR` over SSH before `scp`, so a missing directory is created **if your deploy user can write the parent** (e.g. `/opt`). If `mkdir` fails with “Permission denied”, create the directory once with **`sudo`** and **`chown`** as above.
+The deploy job **does not** create `DEPLOY_DIR`; it only writes `compose.prod.yaml` there. The directory must exist and be writable by `DEPLOY_USER`.
 
 Production `.env` should use **`DB_CONNECTION=pgsql`**, **`DB_HOST=pgsql`**, **`REDIS_HOST=redis`** to match `compose.prod.yaml`. The app is exposed on the host as **`8091` → container `80`**; change the port mapping in `compose.prod.yaml` if it conflicts with other stacks.
 
