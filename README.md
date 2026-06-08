@@ -43,7 +43,7 @@ The in-app **Game Wiki** (`/wiki`) is the live reference for balance and map rul
 
 Open the wiki from the landing page header, the app top bar, or directly at `/wiki` once the app is running. The Map Builder card at the top links straight into authoring.
 
-Wiki map previews live under `public/images/wiki/` and can be regenerated with `npm run wiki:map-previews`.
+Wiki and README preview images live under `public/images/wiki/` (terrain swatches and map-generation renders) and can be regenerated with `npm run wiki:map-previews`.
 
 ### Terrain palette
 
@@ -52,66 +52,66 @@ Twelve brush types paint the vertex grid in the Map Builder and appear on the wi
 <table>
   <tr>
     <td align="center" width="25%">
-      <img alt="Plains" width="56" height="56" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56'%3E%3Crect width='56' height='56' fill='%23c8d68a' stroke='%23111' stroke-width='2'/%3E%3C/svg%3E" /><br />
+      <img alt="Plains" width="56" height="56" src="public/images/wiki/terrain-plains.svg" /><br />
       <strong>Plains</strong><br />
       <sub>Open grassland</sub>
     </td>
     <td align="center" width="25%">
-      <img alt="Meadow" width="56" height="56" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56'%3E%3Crect width='56' height='56' fill='%23b8d4a0' stroke='%23111' stroke-width='2'/%3E%3C/svg%3E" /><br />
+      <img alt="Meadow" width="56" height="56" src="public/images/wiki/terrain-meadow.svg" /><br />
       <strong>Meadow</strong><br />
       <sub>Soft rolling grass</sub>
     </td>
     <td align="center" width="25%">
-      <img alt="Forest" width="56" height="56" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56'%3E%3Crect width='56' height='56' fill='%233d6b45' stroke='%23111' stroke-width='2'/%3E%3C/svg%3E" /><br />
+      <img alt="Forest" width="56" height="56" src="public/images/wiki/terrain-forest.svg" /><br />
       <strong>Forest</strong><br />
       <sub>Light woodland</sub>
     </td>
     <td align="center" width="25%">
-      <img alt="Dense forest" width="56" height="56" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56'%3E%3Crect width='56' height='56' fill='%231e4a28' stroke='%23111' stroke-width='2'/%3E%3C/svg%3E" /><br />
+      <img alt="Dense forest" width="56" height="56" src="public/images/wiki/terrain-dense_forest.svg" /><br />
       <strong>Dense forest</strong><br />
       <sub>Thick woodland</sub>
     </td>
   </tr>
   <tr>
     <td align="center">
-      <img alt="Hill" width="56" height="56" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56'%3E%3Crect width='56' height='56' fill='%23d4d4d4' stroke='%23111' stroke-width='2'/%3E%3C/svg%3E" /><br />
+      <img alt="Hill" width="56" height="56" src="public/images/wiki/terrain-hill.svg" /><br />
       <strong>Hill</strong><br />
       <sub>High ground</sub>
     </td>
     <td align="center">
-      <img alt="Mountain" width="56" height="56" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56'%3E%3Crect width='56' height='56' fill='%235a5a5a' stroke='%23111' stroke-width='2'/%3E%3C/svg%3E" /><br />
+      <img alt="Mountain" width="56" height="56" src="public/images/wiki/terrain-mountain.svg" /><br />
       <strong>Mountain</strong><br />
       <sub>Impassable</sub>
     </td>
     <td align="center">
-      <img alt="Desert" width="56" height="56" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56'%3E%3Crect width='56' height='56' fill='%23e6c87a' stroke='%23111' stroke-width='2'/%3E%3C/svg%3E" /><br />
+      <img alt="Desert" width="56" height="56" src="public/images/wiki/terrain-desert.svg" /><br />
       <strong>Desert</strong><br />
       <sub>Tank-friendly dunes</sub>
     </td>
     <td align="center">
-      <img alt="Beach" width="56" height="56" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56'%3E%3Crect width='56' height='56' fill='%23f5e6b3' stroke='%23111' stroke-width='2'/%3E%3C/svg%3E" /><br />
+      <img alt="Beach" width="56" height="56" src="public/images/wiki/terrain-beach.svg" /><br />
       <strong>Beach</strong><br />
       <sub>Coastal sand</sub>
     </td>
   </tr>
   <tr>
     <td align="center">
-      <img alt="Water" width="56" height="56" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56'%3E%3Crect width='56' height='56' fill='%234a90d9' stroke='%23111' stroke-width='2'/%3E%3C/svg%3E" /><br />
+      <img alt="Water" width="56" height="56" src="public/images/wiki/terrain-water.svg" /><br />
       <strong>Water</strong><br />
       <sub>Shallow · damage over time</sub>
     </td>
     <td align="center">
-      <img alt="Deep water" width="56" height="56" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56'%3E%3Crect width='56' height='56' fill='%232d5a8c' stroke='%23111' stroke-width='2'/%3E%3C/svg%3E" /><br />
+      <img alt="Deep water" width="56" height="56" src="public/images/wiki/terrain-deep_water.svg" /><br />
       <strong>Deep water</strong><br />
       <sub>Ocean · heavy penalties</sub>
     </td>
     <td align="center">
-      <img alt="River" width="56" height="56" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56'%3E%3Crect width='56' height='56' fill='%235ba3e8' stroke='%23111' stroke-width='2'/%3E%3C/svg%3E" /><br />
+      <img alt="River" width="56" height="56" src="public/images/wiki/terrain-river.svg" /><br />
       <strong>River</strong><br />
       <sub>Narrow chokepoints</sub>
     </td>
     <td align="center">
-      <img alt="Swamp" width="56" height="56" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56'%3E%3Crect width='56' height='56' fill='%236b8f7a' stroke='%23111' stroke-width='2'/%3E%3C/svg%3E" /><br />
+      <img alt="Swamp" width="56" height="56" src="public/images/wiki/terrain-swamp.svg" /><br />
       <strong>Swamp</strong><br />
       <sub>Boggy wetland</sub>
     </td>
@@ -211,6 +211,7 @@ flowchart TB
 
 - PHP **8.3+**, [Composer](https://getcomposer.org/)
 - Node **22+** and npm  
+- [Redis](https://redis.io/) (live match state; required for lobbies and matches)
 - [Docker](https://www.docker.com/) (recommended for [Laravel Sail](https://laravel.com/docs/sail))
 
 ### Install
@@ -223,7 +224,7 @@ cp .env.example .env
 php artisan key:generate
 ```
 
-Configure `.env` (database, `WORKOS_*`, `REDIS_*`, Reverb keys as needed for your environment).
+Configure `.env` (database, `WORKOS_*`, `REDIS_*`, and `REVERB_*` / `VITE_REVERB_*` for WebSockets). Matches need **Redis** plus **Reverb** and the **game tick** worker so the battlefield simulates and broadcasts state.
 
 ### Run with Sail
 
@@ -232,9 +233,9 @@ Configure `.env` (database, `WORKOS_*`, `REDIS_*`, Reverb keys as needed for you
 ./vendor/bin/sail artisan migrate
 ./vendor/bin/sail npm install
 ./vendor/bin/sail npm run dev
-# optional: ./vendor/bin/sail artisan reverb:start
-# optional: ./vendor/bin/sail artisan game:tick --daemon
 ```
+
+Sail’s [`compose.yaml`](compose.yaml) already runs **Reverb** and **`php artisan game:tick --daemon`** as separate services, so you do not need to start them manually when using Sail.
 
 Then open the URL Sail prints (often `http://localhost`).
 
@@ -243,11 +244,19 @@ Then open the URL Sail prints (often `http://localhost`).
 ```bash
 php artisan migrate
 npm install
-npm run dev
-php artisan serve
+composer run dev
 ```
 
-Use `composer run dev` if your project defines a concurrent dev script.
+`composer run dev` runs the HTTP server, queue worker, logs, Vite, **Reverb**, and **`game:tick --daemon`** together. Ensure **Redis** is running and `REDIS_*` in `.env` points at it.
+
+If you prefer to run pieces yourself:
+
+```bash
+php artisan serve
+npm run dev
+php artisan reverb:start
+php artisan game:tick --daemon
+```
 
 ---
 
@@ -319,7 +328,7 @@ Point DNS or a reverse proxy at the host port you mapped (default **8091**), or 
 |---------|---------|
 | `npm run dev` | Vite dev server + HMR |
 | `npm run build` | Production frontend build |
-| `npm run wiki:map-previews` | Regenerate wiki terrain SVGs under `public/images/wiki/` |
+| `npm run wiki:map-previews` | Regenerate wiki/README preview SVGs under `public/images/wiki/` |
 | `npm run verify:troops` | Sanity-check generated troop layouts |
 | `php artisan test --compact` | PHPUnit suite |
 
