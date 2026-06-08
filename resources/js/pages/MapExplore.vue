@@ -103,7 +103,6 @@ const hasActiveFilters = computed(() => {
 const hasUuidFilter = computed(() => filterForm.uuid.trim() !== '');
 
 const lobbyForm = useForm({
-    max_players: 4,
     map_uuid: '',
 });
 
@@ -135,6 +134,7 @@ function buildExploreQuery(overrides: Partial<ExploreFilters> & { page?: number 
     }
 
     const pageNum = overrides.page ?? 1;
+
     if (pageNum > 1) {
         out.page = pageNum;
     }
@@ -242,8 +242,6 @@ function startLobby(m: ExploreMapCard): void {
         return;
     }
 
-    const tc = typeof m.data.teamCount === 'number' && Number.isFinite(m.data.teamCount) ? m.data.teamCount : 2;
-    lobbyForm.max_players = Math.min(6, Math.max(2, tc));
     lobbyForm.map_uuid = m.uuid;
     lobbyForm.post(createGame().url);
 }

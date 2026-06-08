@@ -8,6 +8,7 @@ use App\Events\GameInitialized;
 use App\Events\GameStateUpdated;
 use App\Games\Engine\Environment;
 use App\Games\GameConstants;
+use App\Maps\MapMarkers;
 use App\Models\Game;
 use App\Models\GamePlayer;
 use App\Models\Map;
@@ -24,26 +25,43 @@ final class GameManager
         private GameTickService $tickService,
     ) {}
 
-    public function create(User $host, int $maxPlayers, ?Map $sourceMap = null): Game
+    public function create(User $host, Map $sourceMap): Game
     {
-        $maxPlayers = max(GameConstants::MIN_PLAYERS, min(GameConstants::MAX_PLAYERS, $maxPlayers));
+        $data = $sourceMap->data;
+        if (! is_array($data)) {
+            abort(422, 'This map has invalid data.');
+        }
 
-        $settings = $sourceMap === null
-            ? null
-            : [
-                'source_map_uuid' => $sourceMap->uuid,
-                'source_map_name' => $sourceMap->name,
-            ];
+        $errors = MapMarkers::validate($data);
+        if ($errors !== []) {
+            abort(422, implode(' ', $errors));
+        }
+
+        $teamCount = (int) $data['teamCount'];
+        $teamCount = max(GameConstants::MIN_PLAYERS, min(GameConstants::MAX_PLAYERS, $teamCount));
+
+        $sourceMap->loadMissing('user');
+
+        $snapshot = [
+            'source_uuid' => $sourceMap->uuid,
+            'source_name' => $sourceMap->name,
+            'source_author' => $sourceMap->user?->name ?? 'Unknown',
+            'data' => $data,
+        ];
 
         $game = Game::query()->create([
             'uuid' => (string) Str::uuid(),
             'code' => $this->codeGenerator->generate(),
             'status' => GameStatus::Lobby,
-            'max_players' => $maxPlayers,
+            'max_players' => $teamCount,
             'seed' => random_int(1, PHP_INT_MAX),
             'host_user_id' => $host->id,
-            'map_id' => $sourceMap?->id,
-            'settings' => $settings,
+            'map_id' => $sourceMap->id,
+            'map_data' => $snapshot,
+            'settings' => [
+                'source_map_uuid' => $sourceMap->uuid,
+                'source_map_name' => $sourceMap->name,
+            ],
         ]);
 
         $this->join($game, $host);
@@ -85,7 +103,18 @@ final class GameManager
         }
 
         $playerCount = $game->players()->count();
-        $environment = Environment::create($game->seed, $playerCount);
+        $snapshot = $game->map_data;
+        if (! is_array($snapshot) || ! is_array($snapshot['data'] ?? null)) {
+            abort(422, 'Lobby has no map snapshot.');
+        }
+
+        $mapData = $snapshot['data'];
+        $teamCount = (int) ($mapData['teamCount'] ?? 0);
+        if ($playerCount !== $teamCount) {
+            abort(422, 'Every commander slot must join before starting.');
+        }
+
+        $environment = Environment::fromMapEditorData($game->seed, $playerCount, $mapData);
 
         $game->update([
             'status' => GameStatus::Playing,
@@ -122,6 +151,10 @@ final class GameManager
      */
     public function submitOrders(Game $game, User $user, array $orders): void
     {
+        if ($game->status !== GameStatus::Playing) {
+            abort(422, 'Orders can only be submitted during a live match.');
+        }
+
         $state = $this->getLiveState($game);
         $player = $game->players()->where('user_id', $user->id)->firstOrFail();
         $slot = $player->slot;
@@ -135,6 +168,10 @@ final class GameManager
 
     public function togglePause(Game $game, User $user, bool $paused): void
     {
+        if ($game->status !== GameStatus::Playing) {
+            abort(422, 'Pause can only be toggled during a live match.');
+        }
+
         $state = $this->getLiveState($game);
         $player = $game->players()->where('user_id', $user->id)->firstOrFail();
 
@@ -221,5 +258,31 @@ final class GameManager
     private function redisKey(Game $game): string
     {
         return 'game:live:'.$game->uuid;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function snapshotPayloadForPlayer(Game $game, int $userId): array
+    {
+        $player = $game->players()->where('user_id', $userId)->firstOrFail();
+        $state = $this->getLiveState($game);
+        $environment = $this->environmentFromState($state);
+        $terrainInfo = $environment->getTerrainInfo();
+
+        return [
+            'gameUuid' => $game->uuid,
+            'slot' => $player->slot,
+            'color' => $player->color,
+            'terrain' => $terrainInfo['terrain'],
+            'forest' => $terrainInfo['forest'],
+            'cityPositions' => $terrainInfo['cityPositions'],
+            'world' => [
+                'width' => GameConstants::WORLD_X,
+                'height' => GameConstants::WORLD_Y,
+                'cellSize' => GameConstants::CELL_SIZE,
+            ],
+            'state' => $environment->drawInfo($player->slot),
+        ];
     }
 }

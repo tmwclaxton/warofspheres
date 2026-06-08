@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\GameStatus;
+use App\Games\GameConstants;
 use Database\Factories\GameFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -10,7 +11,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['uuid', 'code', 'status', 'max_players', 'seed', 'host_user_id', 'map_id', 'winner_user_id', 'settings', 'started_at', 'finished_at'])]
+#[Fillable(['uuid', 'code', 'status', 'max_players', 'seed', 'host_user_id', 'map_id', 'map_data', 'winner_user_id', 'settings', 'started_at', 'finished_at'])]
 class Game extends Model
 {
     /** @use HasFactory<GameFactory> */
@@ -58,7 +59,8 @@ class Game extends Model
     public function canStart(): bool
     {
         return $this->status === GameStatus::Lobby
-            && $this->players()->count() >= 2;
+            && $this->players()->count() >= GameConstants::MIN_PLAYERS
+            && $this->players()->count() === $this->max_players;
     }
 
     public function getRouteKeyName(): string
@@ -74,6 +76,7 @@ class Game extends Model
         return [
             'status' => GameStatus::class,
             'settings' => 'array',
+            'map_data' => 'array',
             'started_at' => 'datetime',
             'finished_at' => 'datetime',
         ];

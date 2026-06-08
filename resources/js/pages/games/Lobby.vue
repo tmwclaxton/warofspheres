@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { Head, Link, useForm } from '@inertiajs/vue3';
 import { Plus } from 'lucide-vue-next';
+import { computed } from 'vue';
 import Heading from '@/components/Heading.vue';
+import InputError from '@/components/InputError.vue';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -28,17 +30,29 @@ type Lobby = {
     players: Array<{ slot: number; name: string; color: string }>;
 };
 
-defineProps<{
+type PublishedMap = {
+    uuid: string;
+    name: string;
+    teamCount: number;
+    ownerName: string;
+};
+
+const props = defineProps<{
     lobbies: Lobby[];
+    publishedMaps: PublishedMap[];
 }>();
 
 const createForm = useForm({
-    max_players: 2,
+    map_uuid: '',
 });
 
 const joinForm = useForm({
     code: '',
 });
+
+const selectedMap = computed(() =>
+    props.publishedMaps.find((m) => m.uuid === createForm.map_uuid),
+);
 
 function createLobby() {
     createForm.post(store().url);
@@ -55,7 +69,7 @@ function joinLobby() {
     <div class="flex flex-col gap-8">
         <Heading
             title="Lobby Overview"
-            description="Create or join a quick match. Up to six commanders per battle."
+            description="Pick a published map — lobby size matches the map’s team count. Everyone must join before the host can start."
         />
 
         <div class="grid gap-4 lg:grid-cols-2">
@@ -64,27 +78,44 @@ function joinLobby() {
                     <div class="wod-swatch bg-wod-red" aria-hidden="true" />
                     <h2 class="font-bold">Create lobby</h2>
                 </div>
-                <div class="space-y-2">
-                    <Label for="max_players">Players</Label>
-                    <Select v-model="createForm.max_players">
-                        <SelectTrigger id="max_players" class="w-full">
-                            <SelectValue placeholder="Select players" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem
-                                v-for="n in 5"
-                                :key="n + 1"
-                                :value="n + 1"
-                            >
-                                {{ n + 1 }} players
-                            </SelectItem>
-                        </SelectContent>
-                    </Select>
+                <div v-if="publishedMaps.length === 0" class="text-sm text-muted-foreground">
+                    No published maps yet. Publish one from the Map Builder or explore the gallery.
                 </div>
-                <Button :disabled="createForm.processing" @click="createLobby">
-                    <Plus class="mr-2 h-4 w-4" />
-                    Create lobby
-                </Button>
+                <template v-else>
+                    <div class="space-y-2">
+                        <Label for="map_uuid">Published map</Label>
+                        <Select v-model="createForm.map_uuid">
+                            <SelectTrigger id="map_uuid" class="w-full">
+                                <SelectValue placeholder="Choose a map…" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem
+                                    v-for="m in publishedMaps"
+                                    :key="m.uuid"
+                                    :value="m.uuid"
+                                >
+                                    {{ m.name }} · {{ m.teamCount }} teams · {{ m.ownerName }}
+                                </SelectItem>
+                            </SelectContent>
+                        </Select>
+                        <InputError :message="createForm.errors.map_uuid" />
+                        <p
+                            v-if="selectedMap"
+                            class="text-xs text-muted-foreground"
+                        >
+                            This lobby will hold
+                            <strong>{{ selectedMap.teamCount }}</strong>
+                            commanders (one per team on the map).
+                        </p>
+                    </div>
+                    <Button
+                        :disabled="createForm.processing || !createForm.map_uuid"
+                        @click="createLobby"
+                    >
+                        <Plus class="mr-2 h-4 w-4" />
+                        Create lobby
+                    </Button>
+                </template>
             </div>
 
             <div class="wod-panel space-y-4 p-5">
@@ -101,6 +132,7 @@ function joinLobby() {
                         class="uppercase tracking-widest"
                         placeholder="ABC123"
                     />
+                    <InputError :message="joinForm.errors.code" />
                 </div>
                 <Button
                     variant="outline"

@@ -5,6 +5,7 @@ import {
     Copy,
     Flag,
     Landmark,
+    Loader2,
     Lock,
     RectangleHorizontal,
     Redo2,
@@ -29,6 +30,12 @@ import { Input } from '@/components/ui/input';
 import type { MapDataPayload, MapEditorTool } from '@/composables/useMapEditor';
 import { useMapEditor } from '@/composables/useMapEditor';
 import type { MapGenerationType } from '@/lib/generateRandomMap';
+import {
+    MAP_PROCEDURAL_GENERATION_LIMIT,
+    incrementProceduralMapGenerationCount,
+    readProceduralMapGenerationCount,
+} from '@/lib/mapGenerationLimit';
+import { runProceduralMapGeneration } from '@/lib/runProceduralMapGeneration';
 import {
     DEFAULT_MAP_CELL_COLS,
     DEFAULT_MAP_CELL_ROWS,
@@ -61,6 +68,24 @@ const teamCountOptions = [2, 3, 4, 5, 6] as const;
 
 const editor = useMapEditor(props.defaults);
 const toast = useToastStore();
+const page = usePage();
+
+const proceduralMapGenerationCount = ref(0);
+const mapGenerationPending = ref(false);
+
+function authUserIdForGenerationLimit(): number | undefined {
+    const id = page.props.auth.user?.id;
+
+    return typeof id === 'number' && Number.isFinite(id) ? id : undefined;
+}
+
+function refreshProceduralMapGenerationCount(): void {
+    proceduralMapGenerationCount.value = readProceduralMapGenerationCount(authUserIdForGenerationLimit());
+}
+
+const proceduralGenerationLimitReached = computed(
+    () => proceduralMapGenerationCount.value >= MAP_PROCEDURAL_GENERATION_LIMIT,
+);
 
 const mapsList = ref<MapSummary[]>([...props.maps]);
 
@@ -123,8 +148,6 @@ watch(
     },
     { deep: true },
 );
-
-const page = usePage();
 
 const auth = computed(() => page.props.auth as { user?: object } | undefined);
 const allowLibraryMutations = computed(() => Boolean(auth.value?.user));
@@ -390,15 +413,67 @@ function submitNewMapDialog(): void {
 }
 
 function openGenerateDialog(): void {
+    if (proceduralGenerationLimitReached.value) {
+        toast.error(
+            `You have reached the limit of ${MAP_PROCEDURAL_GENERATION_LIMIT} procedural map generations in this browser.`,
+            12_000,
+        );
+
+        return;
+    }
+
+    if (mapGenerationPending.value) {
+        return;
+    }
+
     generateDialogOpen.value = true;
 }
 
-function onGenerateMap(payload: {
+async function onGenerateMap(payload: {
     seed?: number;
     type: MapGenerationType;
     teamCount: number;
-}): void {
-    editor.generateAndApplyMap(payload.seed, payload.type, payload.teamCount);
+}): Promise<void> {
+    if (proceduralGenerationLimitReached.value) {
+        toast.error(
+            `You have reached the limit of ${MAP_PROCEDURAL_GENERATION_LIMIT} procedural map generations in this browser.`,
+            12_000,
+        );
+
+        return;
+    }
+
+    mapGenerationPending.value = true;
+
+    await nextTick();
+
+    try {
+        const data = await runProceduralMapGeneration({
+            seed: payload.seed,
+            type: payload.type,
+            cellRows: editor.gridRows.value,
+            cellCols: editor.gridCols.value,
+            teamCount: payload.teamCount,
+        });
+
+        const applied = editor.applyGeneratedMap(data);
+
+        if (!applied) {
+            toast.error('The generated map could not be applied to the current grid.');
+
+            return;
+        }
+
+        proceduralMapGenerationCount.value = incrementProceduralMapGenerationCount(
+            authUserIdForGenerationLimit(),
+        );
+    } catch (err) {
+        const message =
+            err instanceof Error ? err.message : 'Map generation failed. Try again with different options.';
+        toast.error(message);
+    } finally {
+        mapGenerationPending.value = false;
+    }
 }
 
 async function onSave(): Promise<void> {
@@ -536,7 +611,15 @@ function onBeforeUnload(e: BeforeUnloadEvent): void {
     }
 }
 
+watch(
+    () => page.props.auth.user?.id,
+    () => {
+        refreshProceduralMapGenerationCount();
+    },
+);
+
 onMounted(() => {
+    refreshProceduralMapGenerationCount();
     window.addEventListener('beforeunload', onBeforeUnload);
 });
 
@@ -595,12 +678,17 @@ onUnmounted(() => {
                 size="sm"
                 variant="outline"
                 class="h-9 gap-1.5 border-2 border-foreground !bg-wod-blue px-3 text-xs font-bold !text-white shadow-[0_2px_0_0_var(--wod-shadow)] hover:!bg-wod-blue/90 hover:!text-white active:!bg-wod-blue/80 dark:!bg-wod-blue dark:hover:!bg-wod-blue/85"
-                title="Replace the map with procedurally generated terrain"
-                :disabled="editorLocked"
+                :title="
+                    proceduralGenerationLimitReached
+                        ? `Procedural generation is limited to ${MAP_PROCEDURAL_GENERATION_LIMIT} maps per account in this browser.`
+                        : 'Replace the map with procedurally generated terrain (runs locally in your browser)'
+                "
+                :disabled="editorLocked || mapGenerationPending || proceduralGenerationLimitReached"
                 @click="openGenerateDialog"
             >
-                <Sparkles class="size-4 shrink-0" />
-                Generate Map
+                <Loader2 v-if="mapGenerationPending" class="size-4 shrink-0 animate-spin" />
+                <Sparkles v-else class="size-4 shrink-0" />
+                {{ mapGenerationPending ? 'Generating…' : 'Generate Map' }}
             </Button>
             <Button
                 type="button"
@@ -741,6 +829,9 @@ onUnmounted(() => {
             v-model:open="generateDialogOpen"
             :dirty="editorDirty"
             :team-count="headerTeamCount"
+            :generating="mapGenerationPending"
+            :generations-used="proceduralMapGenerationCount"
+            :generation-limit="MAP_PROCEDURAL_GENERATION_LIMIT"
             @generate="onGenerateMap"
         />
 

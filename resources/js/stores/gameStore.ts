@@ -35,6 +35,10 @@ type DraftPath = {
     kind: 'troop' | 'city';
 };
 
+function initialWorld() {
+    return { width: 1280, height: 700, cellSize: 20 };
+}
+
 export const useGameStore = defineStore('game', {
     state: () => ({
         connected: false,
@@ -45,7 +49,7 @@ export const useGameStore = defineStore('game', {
         terrain: null as number[][] | null,
         forest: null as number[][] | null,
         cityPositions: [] as Point[],
-        world: { width: 1280, height: 700, cellSize: 20 },
+        world: initialWorld(),
         latestState: null as GameState | null,
         draftPaths: [] as DraftPath[],
         activeDraft: null as DraftPath | null,
@@ -57,6 +61,25 @@ export const useGameStore = defineStore('game', {
         echo: null as ReturnType<typeof createGameEcho> | null,
     }),
     actions: {
+        reset() {
+            this.connected = false;
+            this.initialized = false;
+            this.gameUuid = '';
+            this.slot = 0;
+            this.color = '#c0392b';
+            this.terrain = null;
+            this.forest = null;
+            this.cityPositions = [];
+            this.world = initialWorld();
+            this.latestState = null;
+            this.draftPaths = [];
+            this.activeDraft = null;
+            this.camX = 0;
+            this.camY = 0;
+            this.zoom = 1;
+            this.paused = false;
+            this.winnerUserId = null;
+        },
         connect(gameUuid: string, userId: number, slot: number, color: string) {
             this.disconnect();
             this.gameUuid = gameUuid;
@@ -66,12 +89,11 @@ export const useGameStore = defineStore('game', {
 
             this.echo
                 .private(`game.${gameUuid}.${userId}`)
+                .subscribed(() => {
+                    this.connected = true;
+                })
                 .listen('.GameInitialized', (payload: Record<string, unknown>) => {
-                    this.terrain = payload.terrain as number[][];
-                    this.forest = payload.forest as number[][];
-                    this.cityPositions = payload.cityPositions as Point[];
-                    this.world = payload.world as typeof this.world;
-                    this.initialized = true;
+                    this.applySnapshotPayload(payload);
                 })
                 .listen('.GameStateUpdated', (payload: Record<string, unknown>) => {
                     this.latestState = payload.state as GameState;
@@ -79,13 +101,67 @@ export const useGameStore = defineStore('game', {
                 .listen('.GameEnded', (payload: Record<string, unknown>) => {
                     this.winnerUserId = payload.winnerUserId as number | null;
                 });
+        },
+        applySnapshotPayload(payload: Record<string, unknown>) {
+            this.terrain = payload.terrain as number[][];
+            this.forest = payload.forest as number[][];
+            this.cityPositions = payload.cityPositions as Point[];
 
-            this.connected = true;
+            if (payload.world && typeof payload.world === 'object') {
+                this.world = payload.world as typeof this.world;
+            }
+
+            if (payload.slot !== undefined && payload.slot !== null) {
+                this.slot = Number(payload.slot);
+            }
+
+            if (typeof payload.color === 'string') {
+                this.color = payload.color;
+            }
+
+            if (payload.state && typeof payload.state === 'object') {
+                this.latestState = payload.state as GameState;
+            }
+
+            this.initialized = true;
+        },
+        async fetchSnapshotIfNeeded(url: string) {
+            if (this.initialized) {
+                return;
+            }
+
+            try {
+                const raw = document.cookie
+                    .split('; ')
+                    .find((row) => row.startsWith('XSRF-TOKEN='))
+                    ?.split('=')[1];
+                const res = await fetch(url, {
+                    credentials: 'same-origin',
+                    headers: {
+                        Accept: 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        ...(raw
+                            ? {
+                                  'X-XSRF-TOKEN': decodeURIComponent(raw),
+                              }
+                            : {}),
+                    },
+                });
+
+                if (!res.ok) {
+                    return;
+                }
+
+                const data = (await res.json()) as Record<string, unknown>;
+                this.applySnapshotPayload(data);
+            } catch {
+                // Echo may still deliver GameInitialized
+            }
         },
         disconnect() {
             this.echo?.disconnect();
             this.echo = null;
-            this.connected = false;
+            this.reset();
         },
         beginPath(entityId: number, kind: 'troop' | 'city', start: Point) {
             this.activeDraft = {
@@ -100,12 +176,14 @@ export const useGameStore = defineStore('game', {
             }
 
             const last = this.activeDraft.points.at(-1);
+
             if (!last) {
                 return;
             }
 
             const dx = point[0] - last[0];
             const dy = point[1] - last[1];
+
             if (Math.hypot(dx, dy) > 8) {
                 this.activeDraft.points.push(point);
             }

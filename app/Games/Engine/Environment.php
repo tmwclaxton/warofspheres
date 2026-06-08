@@ -3,6 +3,7 @@
 namespace App\Games\Engine;
 
 use App\Games\GameConstants;
+use App\Maps\BattlefieldFromMap;
 
 final class Environment
 {
@@ -36,14 +37,19 @@ final class Environment
 
     private int $rngSeed;
 
-    public function __construct(private int $seed, private int $playerCount)
-    {
+    public function __construct(
+        private int $seed,
+        private int $playerCount,
+        private bool $skipProceduralInitialization = false,
+    ) {
         $this->rngSeed = $seed;
         $this->terrainMarching = new MarchingSquares;
         $this->forestMarching = new MarchingSquares;
-        $this->generateTerrain();
-        $this->generateDefaultVision();
-        $this->assignPlayers();
+        if (! $this->skipProceduralInitialization) {
+            $this->generateTerrain();
+            $this->generateDefaultVision();
+            $this->assignPlayers();
+        }
         $this->visionBrush = new Brush(75, 1, 0);
         $this->cityVisionBrush = new Brush(175, 1, 0);
         $this->borderBrush = new Brush(40, 0.05, 0);
@@ -54,6 +60,52 @@ final class Environment
     public static function create(int $seed, int $playerCount): self
     {
         return new self($seed, $playerCount);
+    }
+
+    /**
+     * Build a battlefield from a published Map Builder v2 payload (cropped to live size).
+     *
+     * @param  array<string, mixed>  $mapDataV2
+     */
+    public static function fromMapEditorData(int $seed, int $playerCount, array $mapDataV2): self
+    {
+        $environment = new self($seed, $playerCount, true);
+        BattlefieldFromMap::populateEnvironment($environment, $mapDataV2);
+
+        return $environment;
+    }
+
+    /**
+     * @param  list<City>  $cities
+     * @param  list<Player>  $players
+     */
+    public function setCitiesPlayersAndIds(
+        array $cities,
+        array $players,
+        int $nextCityId,
+        int $nextTroopId,
+    ): void {
+        $this->cities = $cities;
+        $this->players = $players;
+        $this->nextCityId = $nextCityId;
+        $this->nextTroopId = $nextTroopId;
+        $this->playersInCities = array_fill(0, count($this->cities), []);
+    }
+
+    public function rebuildDefaultVisionFromTerrain(): void
+    {
+        $this->defaultVision = MarchingSquares::emptyGrid();
+
+        for ($y = 0; $y <= GameConstants::COLS; $y++) {
+            for ($x = 0; $x <= GameConstants::ROWS; $x++) {
+                $terrainValue = $this->terrainMarching->grid[$x][$y];
+                $forestValue = $this->forestMarching->grid[$x][$y];
+                $this->defaultVision[$x][$y] = 0.35 + (
+                    max(min((($terrainValue + 0.1) / 1) + 0.2, 1), 0.2)
+                    + ($forestValue > 0.6 ? 0.8 : 0.0)
+                );
+            }
+        }
     }
 
     /**
@@ -163,18 +215,7 @@ final class Environment
 
     private function generateDefaultVision(): void
     {
-        $this->defaultVision = MarchingSquares::emptyGrid();
-
-        for ($y = 0; $y <= GameConstants::COLS; $y++) {
-            for ($x = 0; $x <= GameConstants::ROWS; $x++) {
-                $terrainValue = $this->terrainMarching->grid[$x][$y];
-                $forestValue = $this->forestMarching->grid[$x][$y];
-                $this->defaultVision[$x][$y] = 0.35 + (
-                    max(min((($terrainValue + 0.1) / 1) + 0.2, 1), 0.2)
-                    + ($forestValue > 0.6 ? 0.8 : 0.0)
-                );
-            }
-        }
+        $this->rebuildDefaultVisionFromTerrain();
     }
 
     private function assignPlayers(): void
@@ -294,7 +335,7 @@ final class Environment
 
     private function randomInt(int $min, int $max): int
     {
-        $this->rngSeed = ($this->rngSeed * 1103515245 + 12345) & 0x7fffffff;
+        $this->rngSeed = ($this->rngSeed * 1103515245 + 12345) & 0x7FFFFFFF;
 
         return $min + ($this->rngSeed % ($max - $min + 1));
     }
@@ -441,7 +482,7 @@ final class Environment
                 if ($troop->path !== []) {
                     $target = $troop->path[0];
                     $terrainSpeed = GameConstants::TERRAIN_SPEEDS[$onTerrain];
-                    [$dir, ] = GameMath::xyToDirDis([$target[0] - $oldPos[0], $target[1] - $oldPos[1]]);
+                    [$dir] = GameMath::xyToDirDis([$target[0] - $oldPos[0], $target[1] - $oldPos[1]]);
                     $distance = $terrainSpeed * 0.1;
                     [$newOffX, $newOffY] = GameMath::dirDisToXy($dir, $distance);
                     $newPos = [$oldPos[0] + $newOffX, $oldPos[1] + $newOffY];

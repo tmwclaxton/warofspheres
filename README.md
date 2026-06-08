@@ -49,6 +49,8 @@ Wiki and README preview images live under `public/images/wiki/` (terrain swatche
 
 Twelve brush types paint the vertex grid in the Map Builder and appear on the wiki terrain table. Swatches match the in-game editor colors.
 
+<div align="center">
+
 <table>
   <tr>
     <td align="center" width="25%">
@@ -117,6 +119,8 @@ Twelve brush types paint the vertex grid in the Map Builder and appear on the wi
     </td>
   </tr>
 </table>
+
+</div>
 
 Infantry generally keeps speed in forests and hills; tanks excel on plains, desert, and beach but bog down in woodland and water. Full speed, attack, and defense multipliers for every tile are on the wiki terrain table.
 

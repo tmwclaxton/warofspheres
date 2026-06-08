@@ -3,12 +3,14 @@
 namespace App\Http\Controllers\Games;
 
 use App\Enums\GameStatus;
+use App\Games\GameConstants;
 use App\Games\Services\GameManager;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Games\CreateGameRequest;
 use App\Http\Requests\Games\SubmitOrdersRequest;
 use App\Models\Game;
 use App\Models\Map;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -26,8 +28,23 @@ class GameController extends Controller
             ->get()
             ->map(fn (Game $game) => $this->serializeLobby($game, $request->user()->id));
 
+        $publishedMaps = Map::query()
+            ->where('published', true)
+            ->with(['user:id,name'])
+            ->orderByDesc('published_at')
+            ->orderByDesc('id')
+            ->limit(30)
+            ->get()
+            ->map(fn (Map $map) => [
+                'uuid' => $map->uuid,
+                'name' => $map->name,
+                'teamCount' => (int) ($map->data['teamCount'] ?? GameConstants::MIN_PLAYERS),
+                'ownerName' => $map->user?->name ?? 'Unknown',
+            ]);
+
         return Inertia::render('games/Lobby', [
             'lobbies' => $lobbies,
+            'publishedMaps' => $publishedMaps,
         ]);
     }
 
@@ -65,17 +82,13 @@ class GameController extends Controller
 
     public function store(CreateGameRequest $request, GameManager $gameManager): RedirectResponse
     {
-        $map = null;
-        if ($request->filled('map_uuid')) {
-            $map = Map::query()
-                ->where('uuid', $request->string('map_uuid'))
-                ->where('published', true)
-                ->firstOrFail();
-        }
+        $map = Map::query()
+            ->where('uuid', $request->string('map_uuid'))
+            ->where('published', true)
+            ->firstOrFail();
 
         $game = $gameManager->create(
             $request->user(),
-            $request->integer('max_players'),
             $map,
         );
 
@@ -134,13 +147,23 @@ class GameController extends Controller
                 'maxPlayers' => $game->max_players,
                 'slot' => $player->slot,
                 'color' => $player->color,
-                'players' => $game->players->map(fn ($p) => [
+                'players' => $game->players->sortBy('slot')->values()->map(fn ($p) => [
                     'slot' => $p->slot,
                     'name' => $p->user->name,
                     'color' => $p->color,
-                ])->values(),
+                ]),
             ],
+            'snapshotUrl' => route('games.snapshot', $game),
         ]);
+    }
+
+    public function snapshot(Request $request, Game $game, GameManager $gameManager): JsonResponse
+    {
+        abort_unless($game->status === GameStatus::Playing, 404);
+
+        $game->players()->where('user_id', $request->user()->id)->firstOrFail();
+
+        return response()->json($gameManager->snapshotPayloadForPlayer($game, $request->user()->id));
     }
 
     public function submitOrders(SubmitOrdersRequest $request, Game $game, GameManager $gameManager): RedirectResponse
@@ -189,6 +212,13 @@ class GameController extends Controller
                 'name' => $game->map->name,
                 'by' => $game->map->user?->name ?? 'Unknown',
             ];
+        } elseif (is_array($game->map_data)) {
+            $snap = $game->map_data;
+            $sourceMap = [
+                'uuid' => (string) ($snap['source_uuid'] ?? ''),
+                'name' => (string) ($snap['source_name'] ?? 'Unknown map'),
+                'by' => (string) ($snap['source_author'] ?? 'Unknown'),
+            ];
         }
 
         return [
@@ -201,11 +231,11 @@ class GameController extends Controller
             'isParticipant' => $userId !== null && $game->players->contains('user_id', $userId),
             'canStart' => $game->canStart(),
             'hostName' => $game->host?->name,
-            'players' => $game->players->map(fn ($player) => [
+            'players' => $game->players->sortBy('slot')->values()->map(fn ($player) => [
                 'slot' => $player->slot,
                 'name' => $player->user->name,
                 'color' => $player->color,
-            ])->values(),
+            ]),
             'sourceMap' => $sourceMap,
         ];
     }

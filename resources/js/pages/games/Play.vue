@@ -18,6 +18,7 @@ type GamePayload = {
 
 const props = defineProps<{
     game: GamePayload;
+    snapshotUrl: string;
 }>();
 
 const page = usePage();
@@ -25,8 +26,13 @@ const store = useGameStore();
 
 onMounted(() => {
     const userId = page.props.auth.user?.id;
+
     if (userId) {
         store.connect(props.game.uuid, userId, props.game.slot, props.game.color);
+        void store.fetchSnapshotIfNeeded(props.snapshotUrl);
+        setTimeout(() => {
+            void store.fetchSnapshotIfNeeded(props.snapshotUrl);
+        }, 2200);
     }
 });
 
@@ -52,7 +58,7 @@ onUnmounted(() => {
             </div>
             <div class="flex items-center gap-2">
                 <span
-                    v-for="player in game.players"
+                    v-for="player in [...game.players].sort((a, b) => a.slot - b.slot)"
                     :key="player.slot"
                     class="wod-chip"
                 >
@@ -89,6 +95,21 @@ onUnmounted(() => {
         </header>
 
         <div class="relative min-h-0 flex-1 border-y-2 border-foreground">
+            <div
+                v-if="!store.initialized && !store.winnerUserId"
+                class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-background/90 text-center"
+            >
+                <p class="text-sm font-semibold text-muted-foreground">
+                    Connecting to battlefield…
+                </p>
+                <p
+                    v-if="!store.connected"
+                    class="max-w-sm text-xs text-muted-foreground"
+                >
+                    If this hangs, ensure Reverb is running and your `.env` matches
+                    `VITE_REVERB_*`.
+                </p>
+            </div>
             <GameCanvas />
             <div
                 v-if="store.winnerUserId"

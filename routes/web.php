@@ -1,6 +1,7 @@
 <?php
 
 use App\Game\GameSpecs;
+use App\Http\Controllers\Admin\OverviewController;
 use App\Http\Controllers\Games\GameController;
 use App\Http\Controllers\Maps\MapController;
 use Illuminate\Support\Facades\Route;
@@ -14,6 +15,8 @@ Route::get('maps/explore', [MapController::class, 'explore'])->name('maps.explor
 
 // Published maps are viewable in the builder without auth (see MapPolicy::view). Bare /map-builder requires login.
 Route::get('map-builder/{map?}', [MapController::class, 'builder'])->name('map-builder');
+
+Route::middleware(['auth', 'admin'])->get('admin', OverviewController::class)->name('admin.overview');
 
 Route::middleware(['auth'])->group(function () {
     Route::get('maps', [MapController::class, 'index'])->name('maps.index');
@@ -33,6 +36,7 @@ Route::middleware(['auth'])->group(function () {
     Route::get('games/{game}', [GameController::class, 'show'])->name('games.show');
     Route::post('games/{game}/join', [GameController::class, 'join'])->name('games.join');
     Route::post('games/{game}/start', [GameController::class, 'start'])->name('games.start');
+    Route::get('games/{game}/snapshot', [GameController::class, 'snapshot'])->name('games.snapshot');
     Route::get('games/{game}/play', [GameController::class, 'play'])->name('games.play');
     Route::post('games/{game}/orders', [GameController::class, 'submitOrders'])->name('games.orders');
     Route::post('games/{game}/pause', [GameController::class, 'togglePause'])->name('games.pause');

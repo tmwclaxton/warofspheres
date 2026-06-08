@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Sparkles } from 'lucide-vue-next';
-import { ref, watch } from 'vue';
+import { Loader2, Sparkles } from 'lucide-vue-next';
+import { computed, ref, watch } from 'vue';
 import AppModal from '@/components/AppModal.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,11 +14,33 @@ const open = defineModel<boolean>('open', { required: true });
 const props = defineProps<{
     dirty: boolean;
     teamCount: number;
+    generating: boolean;
+    generationsUsed: number;
+    generationLimit: number;
 }>();
 
 const emit = defineEmits<{
     generate: [payload: { seed?: number; type: MapGenerationType; teamCount: number }];
 }>();
+
+const atGenerationLimit = computed(
+    () => props.generationsUsed >= props.generationLimit,
+);
+
+const generationsRemaining = computed(() =>
+    Math.max(0, props.generationLimit - props.generationsUsed),
+);
+
+const dialogDescription = computed(() => {
+    const local =
+        'Terrain is built entirely in your browser (no server round-trip). ';
+
+    if (atGenerationLimit.value) {
+        return `${local}You have used all ${props.generationLimit} procedural generations allowed for this account on this device.`;
+    }
+
+    return `${local}You can run ${generationsRemaining.value} more generation${generationsRemaining.value === 1 ? '' : 's'} on this device.`;
+});
 
 const selectedType = ref<MapGenerationType>('mix');
 const seed = ref('');
@@ -58,6 +80,10 @@ function parseSeedInput(raw: string): number | undefined {
 }
 
 function onGenerate(): void {
+    if (atGenerationLimit.value || props.generating) {
+        return;
+    }
+
     emit('generate', {
         seed: parseSeedInput(seed.value),
         type: selectedType.value,
@@ -71,10 +97,17 @@ function onGenerate(): void {
     <AppModal
         v-model:open="open"
         title="Generate map"
-        description="Replace the current map with procedurally generated terrain."
+        :description="dialogDescription"
         content-class="sm:max-w-lg"
     >
         <div class="space-y-4" @keydown.stop>
+            <p
+                v-if="atGenerationLimit"
+                class="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            >
+                Generation limit reached for this browser. You have already created
+                {{ props.generationLimit }} procedurally generated maps.
+            </p>
             <p
                 v-if="props.dirty"
                 class="rounded-md border border-amber-300/80 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-950/40 dark:text-amber-100"
@@ -139,10 +172,18 @@ function onGenerate(): void {
         </div>
 
         <template #footer>
-            <Button type="button" variant="outline" @click="open = false">Cancel</Button>
-            <Button type="button" class="gap-1.5" @click="onGenerate">
-                <Sparkles class="size-3.5" />
-                Generate
+            <Button type="button" variant="outline" :disabled="props.generating" @click="open = false">
+                Cancel
+            </Button>
+            <Button
+                type="button"
+                class="gap-1.5"
+                :disabled="props.generating || atGenerationLimit"
+                @click="onGenerate"
+            >
+                <Loader2 v-if="props.generating" class="size-3.5 shrink-0 animate-spin" />
+                <Sparkles v-else class="size-3.5 shrink-0" />
+                {{ props.generating ? 'Generating…' : 'Generate' }}
             </Button>
         </template>
     </AppModal>

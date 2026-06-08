@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Head, Link, router } from '@inertiajs/vue3';
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { join, play, start } from '@/routes/games';
@@ -22,6 +23,42 @@ type Lobby = {
 const props = defineProps<{
     game: Lobby;
 }>();
+
+const commanderByDisplaySlot = computed(() => {
+    const out: Record<number, Lobby['players'][0] | undefined> = {};
+
+    for (let i = 1; i <= props.game.maxPlayers; i++) {
+        out[i] = props.game.players.find((p) => p.slot === i - 1);
+    }
+
+    return out;
+});
+
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+onMounted(() => {
+    pollTimer = setInterval(() => {
+        if (props.game.status === 'lobby') {
+            router.reload({ only: ['game'] });
+        }
+    }, 2000);
+});
+
+watch(
+    () => props.game.status,
+    (status) => {
+        if (status === 'playing' && props.game.isParticipant) {
+            router.visit(play(props.game.uuid).url);
+        }
+    },
+);
+
+onBeforeUnmount(() => {
+    if (pollTimer !== null) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
+});
 
 function joinGame() {
     router.post(join(props.game.uuid).url);
@@ -46,6 +83,12 @@ function startGame() {
             <p class="mt-3 text-sm text-muted-foreground">
                 {{ game.playerCount }} / {{ game.maxPlayers }} commanders ready
             </p>
+            <p
+                v-if="game.status === 'lobby'"
+                class="mt-2 text-xs text-muted-foreground"
+            >
+                Waiting room updates every few seconds. When the host starts, you will jump to the battlefield automatically.
+            </p>
         </div>
 
         <div
@@ -53,33 +96,34 @@ function startGame() {
             class="wod-panel border-dashed p-4 text-sm"
         >
             <p class="text-xs font-semibold uppercase text-muted-foreground">
-                Map attribution
+                Battlefield map
             </p>
             <p class="mt-1 font-medium">
                 {{ game.sourceMap.name }}
             </p>
             <p class="text-xs text-muted-foreground">
-                Design by {{ game.sourceMap.by }} · gameplay still uses the procedural battlefield for now.
+                Design by {{ game.sourceMap.by }} · this layout is used when the match begins.
             </p>
         </div>
 
         <div class="wod-panel space-y-2 p-4">
             <h2 class="font-bold">Commanders</h2>
             <div
-                v-for="slot in game.maxPlayers"
-                :key="slot"
+                v-for="slotNum in game.maxPlayers"
+                :key="slotNum"
                 class="flex items-center justify-between rounded-md border-2 border-foreground bg-background px-3 py-2"
             >
-                <span class="text-sm font-semibold">Slot {{ slot }}</span>
-                <template v-if="game.players[slot - 1]">
+                <span class="text-sm font-semibold">Slot {{ slotNum }}</span>
+                <template v-if="commanderByDisplaySlot[slotNum]">
                     <span class="flex items-center gap-2 text-sm">
                         <span
                             class="wod-swatch !size-3 rounded-full"
                             :style="{
-                                backgroundColor: game.players[slot - 1].color,
+                                backgroundColor:
+                                    commanderByDisplaySlot[slotNum]!.color,
                             }"
                         />
-                        {{ game.players[slot - 1].name }}
+                        {{ commanderByDisplaySlot[slotNum]!.name }}
                     </span>
                 </template>
                 <Badge v-else variant="outline">Empty</Badge>

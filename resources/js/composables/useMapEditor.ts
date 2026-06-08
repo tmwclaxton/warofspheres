@@ -903,7 +903,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         return fetchMapsSummaries();
     }
 
-    function applyGeneratedMap(payload: MapDataPayload | GeneratedMapData): void {
+    function applyGeneratedMap(payload: MapDataPayload | GeneratedMapData): boolean {
         if (
             !validateMapGridData({
                 cellRows: payload.cellRows,
@@ -911,7 +911,7 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
                 cells: payload.cells,
             })
         ) {
-            return;
+            return false;
         }
 
         snapshot();
@@ -940,10 +940,12 @@ export function useMapEditor(initialDefaults: MapDataPayload) {
         bumpTerrainRender();
         bumpMarkersRender();
         requestMapViewFit();
+
+        return true;
     }
 
-    function generateAndApplyMap(seed?: number, type?: MapGenerationType, teamCountArg?: number): void {
-        applyGeneratedMap(
+    function generateAndApplyMap(seed?: number, type?: MapGenerationType, teamCountArg?: number): boolean {
+        return applyGeneratedMap(
             generateRandomMap({
                 seed,
                 type,

@@ -3,8 +3,6 @@
 namespace Tests\Feature\Games;
 
 use App\Enums\GameStatus;
-use App\Maps\MapEditorGrid;
-use App\Maps\MapMarkers;
 use App\Models\Game;
 use App\Models\Map;
 use App\Models\User;
@@ -39,15 +37,19 @@ class GameLobbyTest extends TestCase
     {
         $host = User::factory()->create();
         $guest = User::factory()->create();
+        $owner = User::factory()->create();
+        $map = Map::factory()->for($owner)->playablePublishedTwoTeam()->create();
 
         $this->actingAs($host)
-            ->post(route('games.store'), ['max_players' => 4])
+            ->post(route('games.store'), ['map_uuid' => $map->uuid])
             ->assertRedirect();
 
         $game = Game::query()->firstOrFail();
 
         $this->assertSame(GameStatus::Lobby, $game->status);
-        $this->assertSame(4, $game->max_players);
+        $this->assertSame(2, $game->max_players);
+        $this->assertIsArray($game->map_data);
+        $this->assertSame($map->uuid, $game->map_data['source_uuid']);
         $this->assertSame(1, $game->players()->count());
 
         $this->actingAs($guest)
@@ -61,9 +63,11 @@ class GameLobbyTest extends TestCase
     {
         $host = User::factory()->create();
         $guest = User::factory()->create();
+        $owner = User::factory()->create();
+        $map = Map::factory()->for($owner)->playablePublishedTwoTeam()->create();
 
         $this->actingAs($host)
-            ->post(route('games.store'), ['max_players' => 2]);
+            ->post(route('games.store'), ['map_uuid' => $map->uuid]);
 
         $game = Game::query()->firstOrFail();
 
@@ -81,36 +85,124 @@ class GameLobbyTest extends TestCase
         $this->assertContains($game->uuid, Redis::smembers('games:active'));
     }
 
-    public function test_create_lobby_with_published_map_uuid_sets_map_id(): void
+    public function test_create_lobby_snapshots_map_data_and_survives_map_deletion(): void
     {
         $host = User::factory()->create();
+        $guest = User::factory()->create();
         $owner = User::factory()->create();
-        $data = MapEditorGrid::emptyData(24, 18);
-        $data['markers'] = [
-            [
-                'type' => MapMarkers::TYPE_CAPITAL,
-                'team' => 0,
-                'row' => 5,
-                'col' => 5,
-            ],
-            [
-                'type' => MapMarkers::TYPE_CAPITAL,
-                'team' => 1,
-                'row' => 20,
-                'col' => 15,
-            ],
-        ];
-        $map = Map::factory()->for($owner)->create(['name' => 'Arena', 'data' => $data]);
-        $map->update(['published' => true, 'published_at' => now()]);
+        $map = Map::factory()->for($owner)->playablePublishedTwoTeam()->create();
 
         $this->actingAs($host)
-            ->post(route('games.store'), [
-                'max_players' => 2,
-                'map_uuid' => $map->uuid,
-            ])
+            ->post(route('games.store'), ['map_uuid' => $map->uuid])
             ->assertRedirect();
 
         $game = Game::query()->firstOrFail();
         $this->assertSame($map->id, $game->map_id);
+        $this->assertIsArray($game->map_data);
+        $this->assertArrayHasKey('data', $game->map_data);
+
+        $this->actingAs($guest)
+            ->post(route('games.join', $game));
+
+        $map->delete();
+
+        $game->refresh();
+        $this->assertNull($game->map_id);
+        $this->assertIsArray($game->map_data);
+
+        $this->actingAs($host)
+            ->post(route('games.start', $game))
+            ->assertRedirect(route('games.play', $game));
+
+        $this->assertSame(GameStatus::Playing, $game->fresh()->status);
+    }
+
+    public function test_snapshot_endpoint_returns_json_for_playing_participant(): void
+    {
+        $host = User::factory()->create();
+        $guest = User::factory()->create();
+        $owner = User::factory()->create();
+        $map = Map::factory()->for($owner)->playablePublishedTwoTeam()->create();
+
+        $this->actingAs($host)
+            ->post(route('games.store'), ['map_uuid' => $map->uuid]);
+        $game = Game::query()->firstOrFail();
+
+        $this->actingAs($guest)
+            ->post(route('games.join', $game));
+
+        $this->actingAs($host)
+            ->post(route('games.start', $game));
+
+        $this->actingAs($host)
+            ->getJson(route('games.snapshot', $game))
+            ->assertOk()
+            ->assertJsonStructure([
+                'gameUuid',
+                'slot',
+                'color',
+                'terrain',
+                'forest',
+                'cityPositions',
+                'world',
+                'state',
+            ]);
+    }
+
+    public function test_submit_orders_rejected_when_game_is_lobby(): void
+    {
+        $host = User::factory()->create();
+        $owner = User::factory()->create();
+        $map = Map::factory()->for($owner)->playablePublishedTwoTeam()->create();
+
+        $this->actingAs($host)
+            ->post(route('games.store'), ['map_uuid' => $map->uuid]);
+        $game = Game::query()->firstOrFail();
+
+        $this->actingAs($host)
+            ->post(route('games.orders', $game), [
+                'troop_orders' => [],
+                'city_orders' => [],
+            ])
+            ->assertStatus(422);
+    }
+
+    public function test_store_requires_map_uuid(): void
+    {
+        $host = User::factory()->create();
+
+        $this->actingAs($host)
+            ->post(route('games.store'), [])
+            ->assertSessionHasErrors('map_uuid');
+    }
+
+    public function test_play_returns_404_while_in_lobby(): void
+    {
+        $host = User::factory()->create();
+        $owner = User::factory()->create();
+        $map = Map::factory()->for($owner)->playablePublishedTwoTeam()->create();
+
+        $this->actingAs($host)
+            ->post(route('games.store'), ['map_uuid' => $map->uuid]);
+        $game = Game::query()->firstOrFail();
+
+        $this->actingAs($host)
+            ->get(route('games.play', $game))
+            ->assertNotFound();
+    }
+
+    public function test_snapshot_returns_404_while_in_lobby(): void
+    {
+        $host = User::factory()->create();
+        $owner = User::factory()->create();
+        $map = Map::factory()->for($owner)->playablePublishedTwoTeam()->create();
+
+        $this->actingAs($host)
+            ->post(route('games.store'), ['map_uuid' => $map->uuid]);
+        $game = Game::query()->firstOrFail();
+
+        $this->actingAs($host)
+            ->getJson(route('games.snapshot', $game))
+            ->assertNotFound();
     }
 }
