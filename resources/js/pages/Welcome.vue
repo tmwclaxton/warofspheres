@@ -103,7 +103,7 @@ const steps = [
                             <Button>Play Now</Button>
                         </Link>
                         <Link v-else :href="login()">
-                            <Button variant="outline">Log in</Button>
+                            <Button variant="outline">Enter Battle</Button>
                         </Link>
                     </nav>
                 </div>
@@ -157,7 +157,7 @@ const steps = [
                             </Link>
                             <Link v-else :href="login()">
                                 <Button size="lg" variant="outline">
-                                    Log in with WorkOS
+                                    Enter Battle
                                 </Button>
                             </Link>
                         </div>
@@ -229,7 +229,7 @@ const steps = [
                     <Button size="lg">Browse lobbies</Button>
                 </Link>
                 <Link v-else :href="login()">
-                    <Button size="lg" variant="outline">Get started</Button>
+                    <Button size="lg" variant="outline">Enter Battle</Button>
                 </Link>
             </section>
         </main>
