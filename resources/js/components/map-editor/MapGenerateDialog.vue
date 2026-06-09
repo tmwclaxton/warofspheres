@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Loader2, Sparkles } from 'lucide-vue-next';
-import { computed, ref, watch } from 'vue';
+import { ref, watch } from 'vue';
 import AppModal from '@/components/AppModal.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,32 +15,14 @@ const props = defineProps<{
     dirty: boolean;
     teamCount: number;
     generating: boolean;
-    generationsUsed: number;
-    generationLimit: number;
 }>();
 
 const emit = defineEmits<{
     generate: [payload: { seed?: number; type: MapGenerationType; teamCount: number }];
 }>();
 
-const atGenerationLimit = computed(
-    () => props.generationsUsed >= props.generationLimit,
-);
-
-const generationsRemaining = computed(() =>
-    Math.max(0, props.generationLimit - props.generationsUsed),
-);
-
-const dialogDescription = computed(() => {
-    const local =
-        'Terrain is built entirely in your browser (no server round-trip). ';
-
-    if (atGenerationLimit.value) {
-        return `${local}You have used all ${props.generationLimit} procedural generations allowed for this account on this device.`;
-    }
-
-    return `${local}You can run ${generationsRemaining.value} more generation${generationsRemaining.value === 1 ? '' : 's'} on this device.`;
-});
+const dialogDescription =
+    'Terrain is built entirely in your browser (no server round-trip). Generate as many previews as you like; only saved maps count toward your account.';
 
 const selectedType = ref<MapGenerationType>('mix');
 const seed = ref('');
@@ -80,7 +62,7 @@ function parseSeedInput(raw: string): number | undefined {
 }
 
 function onGenerate(): void {
-    if (atGenerationLimit.value || props.generating) {
+    if (props.generating) {
         return;
     }
 
@@ -101,13 +83,6 @@ function onGenerate(): void {
         content-class="sm:max-w-lg"
     >
         <div class="space-y-4" @keydown.stop>
-            <p
-                v-if="atGenerationLimit"
-                class="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-            >
-                Generation limit reached for this browser. You have already created
-                {{ props.generationLimit }} procedurally generated maps.
-            </p>
             <p
                 v-if="props.dirty"
                 class="rounded-md border border-amber-300/80 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-950/40 dark:text-amber-100"
@@ -178,7 +153,7 @@ function onGenerate(): void {
             <Button
                 type="button"
                 class="gap-1.5"
-                :disabled="props.generating || atGenerationLimit"
+                :disabled="props.generating"
                 @click="onGenerate"
             >
                 <Loader2 v-if="props.generating" class="size-3.5 shrink-0 animate-spin" />

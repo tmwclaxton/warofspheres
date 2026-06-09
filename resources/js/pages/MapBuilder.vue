@@ -32,11 +32,6 @@ import { Input } from '@/components/ui/input';
 import type { MapDataPayload, MapEditorTool } from '@/composables/useMapEditor';
 import { useMapEditor } from '@/composables/useMapEditor';
 import type { MapGenerationType } from '@/lib/generateRandomMap';
-import {
-    MAP_PROCEDURAL_GENERATION_LIMIT,
-    incrementProceduralMapGenerationCount,
-    readProceduralMapGenerationCount,
-} from '@/lib/mapGenerationLimit';
 import { runProceduralMapGeneration } from '@/lib/runProceduralMapGeneration';
 import {
     DEFAULT_MAP_CELL_COLS,
@@ -73,22 +68,7 @@ const toast = useToastStore();
 const page = usePage();
 const isLargeScreen = useMediaQuery('(min-width: 1024px)');
 
-const proceduralMapGenerationCount = ref(0);
 const mapGenerationPending = ref(false);
-
-function authUserIdForGenerationLimit(): number | undefined {
-    const id = page.props.auth.user?.id;
-
-    return typeof id === 'number' && Number.isFinite(id) ? id : undefined;
-}
-
-function refreshProceduralMapGenerationCount(): void {
-    proceduralMapGenerationCount.value = readProceduralMapGenerationCount(authUserIdForGenerationLimit());
-}
-
-const proceduralGenerationLimitReached = computed(
-    () => proceduralMapGenerationCount.value >= MAP_PROCEDURAL_GENERATION_LIMIT,
-);
 
 const mapsList = ref<MapSummary[]>([...props.maps]);
 
@@ -416,15 +396,6 @@ function submitNewMapDialog(): void {
 }
 
 function openGenerateDialog(): void {
-    if (proceduralGenerationLimitReached.value) {
-        toast.error(
-            `You have reached the limit of ${MAP_PROCEDURAL_GENERATION_LIMIT} procedural map generations in this browser.`,
-            12_000,
-        );
-
-        return;
-    }
-
     if (mapGenerationPending.value) {
         return;
     }
@@ -437,15 +408,6 @@ async function onGenerateMap(payload: {
     type: MapGenerationType;
     teamCount: number;
 }): Promise<void> {
-    if (proceduralGenerationLimitReached.value) {
-        toast.error(
-            `You have reached the limit of ${MAP_PROCEDURAL_GENERATION_LIMIT} procedural map generations in this browser.`,
-            12_000,
-        );
-
-        return;
-    }
-
     mapGenerationPending.value = true;
 
     await nextTick();
@@ -466,10 +428,6 @@ async function onGenerateMap(payload: {
 
             return;
         }
-
-        proceduralMapGenerationCount.value = incrementProceduralMapGenerationCount(
-            authUserIdForGenerationLimit(),
-        );
     } catch (err) {
         const message =
             err instanceof Error ? err.message : 'Map generation failed. Try again with different options.';
@@ -614,15 +572,7 @@ function onBeforeUnload(e: BeforeUnloadEvent): void {
     }
 }
 
-watch(
-    () => page.props.auth.user?.id,
-    () => {
-        refreshProceduralMapGenerationCount();
-    },
-);
-
 onMounted(() => {
-    refreshProceduralMapGenerationCount();
     window.addEventListener('beforeunload', onBeforeUnload);
 });
 
@@ -705,12 +655,8 @@ onUnmounted(() => {
                 size="sm"
                 variant="outline"
                 class="h-9 gap-1.5 border-2 border-foreground !bg-wod-blue px-3 text-xs font-bold !text-white shadow-[0_2px_0_0_var(--wod-shadow)] hover:!bg-wod-blue/90 hover:!text-white active:!bg-wod-blue/80 dark:!bg-wod-blue dark:hover:!bg-wod-blue/85"
-                :title="
-                    proceduralGenerationLimitReached
-                        ? `Procedural generation is limited to ${MAP_PROCEDURAL_GENERATION_LIMIT} maps per account in this browser.`
-                        : 'Replace the map with procedurally generated terrain (runs locally in your browser)'
-                "
-                :disabled="editorLocked || mapGenerationPending || proceduralGenerationLimitReached"
+                title="Replace the map with procedurally generated terrain (runs locally in your browser)"
+                :disabled="editorLocked || mapGenerationPending"
                 @click="openGenerateDialog"
             >
                 <Loader2 v-if="mapGenerationPending" class="size-4 shrink-0 animate-spin" />
@@ -857,8 +803,6 @@ onUnmounted(() => {
             :dirty="editorDirty"
             :team-count="headerTeamCount"
             :generating="mapGenerationPending"
-            :generations-used="proceduralMapGenerationCount"
-            :generation-limit="MAP_PROCEDURAL_GENERATION_LIMIT"
             @generate="onGenerateMap"
         />
 
