@@ -4,7 +4,11 @@
 #
 # GitHub Actions renders __GHCR_IMAGE__ in this file before scp (see .github/workflows/prod_deploy.yml).
 # App listens on container :80; host maps 8091 -> 80 (change if 8091 is taken).
-# Reverb maps FORWARD_REVERB_PORT (default 8092) -> 8080. Set REVERB_HOST / VITE_REVERB_* to that host:port from the browser.
+# Reverb maps FORWARD_REVERB_PORT (default 8092) -> 8080. Set REVERB_HOST to the internal service name.
+#
+# IMPORTANT: VITE_REVERB_* are baked into the JS bundle at docker build time (not read from .env at runtime).
+# Set them as GitHub Actions secrets (VITE_REVERB_HOST, VITE_REVERB_PORT, VITE_REVERB_SCHEME, VITE_REVERB_APP_KEY)
+# to point browsers at the correct public WebSocket endpoint (e.g. wss://clashofdots.com:443).
 
 services:
   app:

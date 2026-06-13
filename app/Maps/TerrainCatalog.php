@@ -21,6 +21,7 @@ final class TerrainCatalog
         'swamp',
         'desert',
         'beach',
+        'snow',
     ];
 
     /** @var array<string, string> id => hex */
@@ -37,6 +38,7 @@ final class TerrainCatalog
         'swamp' => '#6b8f7a',
         'desert' => '#e6c87a',
         'beach' => '#f5e6b3',
+        'snow' => '#ddeeff',
     ];
 
     /** @var array<string, string> id => short label */
@@ -53,6 +55,7 @@ final class TerrainCatalog
         'swamp' => 'Swamp',
         'desert' => 'Desert',
         'beach' => 'Beach',
+        'snow' => 'Snow',
     ];
 
     /** @var list<string> */

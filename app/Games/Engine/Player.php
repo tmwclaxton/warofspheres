@@ -21,6 +21,7 @@ final class Player
         public int $slot,
         Environment $environment,
         int $initialTroopId,
+        public int $teamIndex = 0,
     ) {
         $this->border = new MarchingSquares;
         $this->vision = new MarchingSquares;
@@ -37,8 +38,11 @@ final class Player
             'startPos' => $this->startPos,
             'color' => $this->color,
             'slot' => $this->slot,
+            'teamIndex' => $this->teamIndex,
             'border' => $this->border->grid,
-            'vision' => $this->vision->grid,
+            // vision is intentionally excluded: it is always reset and recomputed at the start of
+            // every tick, so persisting it wastes ~111 KB per player per write. It is rebuilt on
+            // demand via Environment::recomputeVision() before any drawInfo() call.
             'troops' => array_map(fn (Troop $t) => $t->toArray(), $this->troops),
             'nextTroopId' => $this->nextTroopId(),
         ];
@@ -50,11 +54,12 @@ final class Player
     public static function fromArray(array $data, Environment $environment): self
     {
         $firstTroopId = $data['troops'][0]['id'] ?? 1;
-        $player = new self($data['startPos'], $data['color'], $data['slot'], $environment, $firstTroopId);
+        $player = new self($data['startPos'], $data['color'], $data['slot'], $environment, $firstTroopId, (int) ($data['teamIndex'] ?? 0));
         $player->troops = [];
         $player->border->setGrid($data['border']);
-        $player->vision->setGrid($data['vision']);
-        $player->troops = [];
+        // vision is not persisted; Environment::recomputeVision() rebuilds it from current
+        // troop positions before any drawInfo() call. The constructor already initialises it
+        // to defaultVision, so fog-of-war is safe even before recomputeVision() runs.
 
         foreach ($data['troops'] as $troopData) {
             $player->troops[] = Troop::fromArray($troopData, $player);
@@ -73,9 +78,9 @@ final class Player
         return $max + 1;
     }
 
-    public function spawnTroop(array $position, array $path, int $troopId, int $spawnedAtWorldTick = -1): Troop
+    public function spawnTroop(array $position, array $path, int $troopId, int $spawnedAtWorldTick = -1, string $type = 'infantry'): Troop
     {
-        $troop = new Troop($position, $this, $troopId, $path, $spawnedAtWorldTick);
+        $troop = new Troop($position, $this, $troopId, $path, $spawnedAtWorldTick, $type);
         $this->troops[] = $troop;
 
         return $troop;

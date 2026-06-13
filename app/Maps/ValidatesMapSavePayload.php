@@ -35,9 +35,13 @@ final class ValidatesMapSavePayload
         ];
     }
 
-    public static function afterValidator(Validator $validator): void
+    /**
+     * @param  bool  $fullMarkerValidation  When true, runs full playability rules (capitals, flags, spacing,
+     *                                      connectivity) in addition to structural checks. Use for publish.
+     */
+    public static function afterValidator(Validator $validator, bool $fullMarkerValidation = false): void
     {
-        $validator->after(function (Validator $validator): void {
+        $validator->after(function (Validator $validator) use ($fullMarkerValidation): void {
             $data = $validator->getData()['data'] ?? null;
             if (! is_array($data)) {
                 return;
@@ -107,7 +111,11 @@ final class ValidatesMapSavePayload
                 return;
             }
 
-            foreach (MapMarkers::validatePersistable($data) as $message) {
+            $markerErrors = $fullMarkerValidation
+                ? MapMarkers::validate($data)
+                : MapMarkers::validatePersistable($data);
+
+            foreach ($markerErrors as $message) {
                 $validator->errors()->add('data.markers', $message);
             }
         });

@@ -15,8 +15,10 @@ use App\Maps\MapMarkers;
 use App\Models\Game;
 use App\Models\GamePlayer;
 use App\Models\Map;
+use App\Models\QuickStartEntry;
 use App\Models\User;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Str;
@@ -77,6 +79,9 @@ final class GameManager
 
         $this->join($game, $host);
 
+        // Allow quick-start players already in the pool to fill this new lobby.
+        $this->runQuickStart();
+
         return $game->fresh(['players.user']);
     }
 
@@ -92,19 +97,49 @@ final class GameManager
             return $game->players()->where('user_id', $user->id)->firstOrFail();
         }
 
+        // Leave any other lobby the user is currently in before joining this one.
+        $this->stripExistingLobby($user->id, null, $game->id);
+
         if ($game->isFull()) {
             abort(422, 'This lobby is full.');
         }
 
         $slot = $game->players()->count();
 
-        return $game->players()->create([
+        $player = $game->players()->create([
             'user_id' => $user->id,
             'guest_key' => null,
             'display_name' => null,
             'slot' => $slot,
             'color' => GameConstants::colorHex($slot),
         ]);
+
+        $this->autoStartIfFull($game);
+
+        return $player;
+    }
+
+    /**
+     * Remove a participant from a lobby. If the leaving player is the host the lobby is cancelled.
+     */
+    public function leaveLobby(Game $game, ?User $user, ?string $guestKey): void
+    {
+        if ($game->status !== GameStatus::Lobby) {
+            return;
+        }
+
+        if ($user !== null && $game->host_user_id === $user->id) {
+            // Host leaves → cancel the lobby.
+            $game->update(['status' => GameStatus::Finished, 'aborted_reason' => 'host_left']);
+
+            return;
+        }
+
+        if ($user !== null) {
+            $game->players()->where('user_id', $user->id)->delete();
+        } elseif ($guestKey !== null) {
+            $game->players()->where('guest_key', $guestKey)->delete();
+        }
     }
 
     public function joinAsGuest(Game $game, string $guestUuid, ?string $displayName): GamePlayer
@@ -124,6 +159,9 @@ final class GameManager
             return $existing;
         }
 
+        // Leave any other lobby the guest is currently in before joining this one.
+        $this->stripExistingLobby(null, $guestUuid, $game->id);
+
         if ($game->isFull()) {
             abort(422, 'This lobby is full.');
         }
@@ -135,13 +173,17 @@ final class GameManager
 
         $slot = $game->players()->count();
 
-        return $game->players()->create([
+        $player = $game->players()->create([
             'user_id' => null,
             'guest_key' => $guestUuid,
             'display_name' => $label !== null ? Str::limit($label, 50, '') : null,
             'slot' => $slot,
             'color' => GameConstants::colorHex($slot),
         ]);
+
+        $this->autoStartIfFull($game);
+
+        return $player;
     }
 
     public function start(Game $game, User $user): Game
@@ -150,12 +192,21 @@ final class GameManager
             abort(403, 'Only the host can start the game.');
         }
 
-        if ($game->status === GameStatus::Lobby) {
-            $this->assertLobbyWithinMaxAge($game);
-        }
-
         if (! $game->canStart()) {
             abort(422, 'Need at least two players to start.');
+        }
+
+        return $this->launch($game);
+    }
+
+    /**
+     * Performs the actual game launch: transitions status to Playing, initialises
+     * the environment, stores live state, and broadcasts GameInitialized to all players.
+     */
+    private function launch(Game $game): Game
+    {
+        if ($game->status === GameStatus::Lobby) {
+            $this->assertLobbyWithinMaxAge($game);
         }
 
         $playerCount = $game->players()->count();
@@ -170,7 +221,9 @@ final class GameManager
             abort(422, 'Every commander slot must join before starting.');
         }
 
-        $environment = Environment::fromMapEditorData($game->seed, $playerCount, $mapData);
+        $game->loadMissing('players');
+        $teamIndicesBySlot = $game->players->pluck('team_index', 'slot')->all();
+        $environment = Environment::fromMapEditorData($game->seed, $playerCount, $mapData, $teamIndicesBySlot);
 
         $game->update([
             'status' => GameStatus::Playing,
@@ -225,6 +278,112 @@ final class GameManager
     }
 
     /**
+     * Auto-starts the game if all slots are now filled.
+     */
+    private function autoStartIfFull(Game $game): void
+    {
+        $game->unsetRelation('players');
+        if ($game->canStart()) {
+            $this->launch($game);
+        }
+    }
+
+    /**
+     * Matches queued quick-start players into open lobbies.
+     *
+     * Strategy: iterate lobbies sorted by fewest open slots first (most full),
+     * so games that only need 1–2 more players complete before emptier ones.
+     * Only fill a lobby when the queue has enough players to completely fill it,
+     * so no one gets stuck in a half-filled lobby waiting for more quick-starters.
+     */
+    public function runQuickStart(): void
+    {
+        DB::transaction(function () {
+            $queue = QuickStartEntry::query()
+                ->where('status', 'queued')
+                ->orderBy('created_at')
+                ->lockForUpdate()
+                ->get();
+
+            if ($queue->isEmpty()) {
+                return;
+            }
+
+            $lobbies = Game::query()
+                ->where('status', GameStatus::Lobby)
+                ->where('created_at', '>=', now()->subSeconds(GameConstants::LOBBY_MAX_AGE_SECONDS))
+                ->withCount('players')
+                ->get()
+                ->map(fn (Game $g) => [
+                    'game' => $g,
+                    'openSlots' => $g->max_players - $g->players_count,
+                ])
+                ->filter(fn ($row) => $row['openSlots'] > 0)
+                ->sortBy('openSlots') // fewest open slots first
+                ->values();
+
+            if ($lobbies->isEmpty()) {
+                return;
+            }
+
+            $remaining = $queue->values();
+
+            foreach ($lobbies as $row) {
+                /** @var Game $game */
+                $game = $row['game'];
+                $need = $row['openSlots'];
+
+                if ($remaining->count() < $need) {
+                    continue; // not enough queued players to fill this lobby
+                }
+
+                $batch = $remaining->take($need);
+                $remaining = $remaining->slice($need)->values();
+
+                foreach ($batch as $entry) {
+                    try {
+                        if ($entry->user_id !== null) {
+                            $user = User::find($entry->user_id);
+                            if ($user !== null) {
+                                $this->join($game, $user);
+                            }
+                        } elseif ($entry->guest_key !== null) {
+                            $this->joinAsGuest($game, $entry->guest_key, null);
+                        }
+                    } catch (\Throwable) {
+                        // If joining fails (e.g. lobby filled mid-transaction), skip gracefully.
+                    }
+
+                    $entry->update(['status' => 'matched', 'game_id' => $game->id]);
+                }
+
+                if ($remaining->isEmpty()) {
+                    break;
+                }
+            }
+        });
+    }
+
+    /**
+     * Removes the user/guest from any other lobby they're currently in (excluding $exceptGameId).
+     */
+    private function stripExistingLobby(?int $userId, ?string $guestKey, int $exceptGameId): void
+    {
+        $query = GamePlayer::query()
+            ->whereHas('game', fn ($q) => $q->where('status', GameStatus::Lobby)->where('id', '!=', $exceptGameId));
+
+        if ($userId !== null) {
+            $query->where('user_id', $userId);
+        } elseif ($guestKey !== null) {
+            $query->where('guest_key', $guestKey);
+        } else {
+            return;
+        }
+
+        $query->delete();
+    }
+
+    /**
      * @param  array{0: list<array{0: int, 1: list<array{0: float, 1: float}>}>, 1: list<array{0: int, 1: list<array{0: float, 1: float}>}>}  $orders
      */
     public function submitOrders(Game $game, GamePlayer $player, array $orders): void
@@ -241,38 +400,11 @@ final class GameManager
         $slot = $player->slot;
 
         [$troopOrders, $cityOrders] = $orders;
-        $state['playerInputs'][$slot] = array_merge($state['playerInputs'][$slot] ?? [], $troopOrders);
-        $state['playerCityInputs'][$slot] = array_merge($state['playerCityInputs'][$slot] ?? [], $cityOrders);
+        $state['playerInputs'][$slot] = $this->mergeOrdersById($state['playerInputs'][$slot] ?? [], $troopOrders);
+        $state['playerCityInputs'][$slot] = $this->mergeOrdersById($state['playerCityInputs'][$slot] ?? [], $cityOrders);
 
         $this->touchPlayerActivityInState($state, $slot);
         $this->storeLiveState($game, $state);
-
-        $environment = $this->environmentFromState($state);
-
-        $mergedTroopPaths = [];
-
-        foreach ($state['playerInputs'] as $inputs) {
-            if (is_array($inputs)) {
-                $mergedTroopPaths = array_merge($mergedTroopPaths, $inputs);
-            }
-        }
-
-        $environment->assignTroopPathsFromOrders($mergedTroopPaths);
-
-        $mergedCityPaths = [];
-
-        foreach ($state['playerCityInputs'] as $inputs) {
-            if (is_array($inputs)) {
-                $mergedCityPaths = array_merge($mergedCityPaths, $inputs);
-            }
-        }
-
-        $environment->assignCityPathsFromOrders($mergedCityPaths);
-
-        $state['environment'] = $environment->toArray();
-        $this->storeLiveState($game, $state);
-
-        $game->loadMissing('players');
 
         GameSimLog::info('game.orders.accepted', [
             'game_uuid' => $game->uuid,
@@ -294,6 +426,101 @@ final class GameManager
             }, $troopOrders),
         ]);
 
+        // The tick daemon applies and broadcasts orders within ~33 ms (30 Hz loop).
+        // Running simulation synchronously in the HTTP path was removed to avoid blocking
+        // the web worker and double-applying path assignments.
+    }
+
+    /**
+     * Merges new orders into an existing pending-orders list, keyed by entity ID.
+     * New orders for the same entity ID replace any previously queued orders so that
+     * re-issuing a command always discards the stale pending entry.
+     *
+     * @param  list<array{0: mixed, 1: mixed}>  $existing
+     * @param  list<array{0: mixed, 1: mixed}>  $incoming
+     * @return list<array{0: mixed, 1: mixed}>
+     */
+    private function mergeOrdersById(array $existing, array $incoming): array
+    {
+        $byId = [];
+        foreach ($existing as $order) {
+            if (is_array($order) && isset($order[0])) {
+                $byId[(int) $order[0]] = $order;
+            }
+        }
+        foreach ($incoming as $order) {
+            if (is_array($order) && isset($order[0])) {
+                $byId[(int) $order[0]] = $order;
+            }
+        }
+
+        return array_values($byId);
+    }
+
+    /**
+     * Sets the production type for one of the player's owned cities.
+     *
+     * @param  'infantry'|'tank'|'none'  $productionType
+     */
+    public function setCityProduction(
+        Game $game,
+        GamePlayer $gamePlayer,
+        int $cityId,
+        string $productionType,
+        ?int $tankRatio = null,
+        ?float $speedMultiplier = null,
+    ): void {
+        if ($game->status !== GameStatus::Playing) {
+            abort(422, 'Production can only be changed during a live match.');
+        }
+
+        if ($gamePlayer->game_id !== $game->id) {
+            abort(403);
+        }
+
+        if (! in_array($productionType, ['infantry', 'tank', 'none'])) {
+            abort(422, 'Invalid production type.');
+        }
+
+        $state = $this->getLiveState($game);
+        $environment = $this->environmentFromState($state);
+        $slot = $gamePlayer->slot;
+        $player = $environment->players[$slot] ?? null;
+
+        if ($player === null) {
+            abort(500, 'Invalid commander slot.');
+        }
+
+        $city = null;
+        foreach ($environment->cities as $c) {
+            if ($c->id === $cityId) {
+                $city = $c;
+                break;
+            }
+        }
+
+        if ($city === null) {
+            abort(422, 'City not found.');
+        }
+
+        if ($city->owner !== $player) {
+            abort(403, 'You do not own this city.');
+        }
+
+        $city->productionType = $productionType;
+
+        if ($tankRatio !== null) {
+            $city->productionTankRatio = max(0, min(100, $tankRatio));
+        }
+
+        if ($speedMultiplier !== null) {
+            $city->productionSpeedMultiplier = max(0.0, min(3.0, $speedMultiplier));
+        }
+
+        $state['environment'] = $environment->toArray();
+
+        $this->touchPlayerActivityInState($state, $slot);
+        $this->storeLiveState($game, $state);
         $this->broadcastState($game, $environment, $state);
     }
 
@@ -399,10 +626,14 @@ final class GameManager
 
         Redis::srem(self::ACTIVE_SET, $game->uuid);
         Redis::del($this->redisKey($game));
+        Redis::del($this->redisMapKey($game));
 
         $game->load('players');
 
         $winnerName = $winner?->displayLabel() ?? 'Unknown';
+
+        // Update MMR: +25 for winner, -20 for losers.
+        $this->applyMmrChanges($game, $winnerSlot);
 
         $this->broadcastIgnoringTransportFailure(new GameEnded(
             $game,
@@ -410,6 +641,19 @@ final class GameManager
             $winner?->slot,
             $winnerName,
         ));
+    }
+
+    private function applyMmrChanges(Game $game, int $winnerSlot): void
+    {
+        foreach ($game->players as $player) {
+            if ($player->user_id === null) {
+                continue;
+            }
+            $delta = $player->slot === $winnerSlot ? 25 : -20;
+            User::query()
+                ->where('id', $player->user_id)
+                ->update(['mmr' => DB::raw("greatest(0, mmr + {$delta})")]);
+        }
     }
 
     /**
@@ -434,6 +678,7 @@ final class GameManager
 
         Redis::srem(self::ACTIVE_SET, $game->uuid);
         Redis::del($this->redisKey($game));
+        Redis::del($this->redisMapKey($game));
 
         $game->load('players');
 
@@ -503,9 +748,23 @@ final class GameManager
             abort(404, 'Live game state not found.');
         }
 
+        $state = json_decode($raw, true, flags: JSON_THROW_ON_ERROR);
+
+        // If terrain was stripped (split format), re-inject static map data so that
+        // Environment::fromArray() can reconstruct the full simulation object.
+        if (isset($state['environment']) && ! isset($state['environment']['terrain'])) {
+            $mapRaw = Redis::get($this->redisMapKey($game));
+            if ($mapRaw) {
+                $state['environment'] = array_merge(
+                    json_decode($mapRaw, true, flags: JSON_THROW_ON_ERROR),
+                    $state['environment'],
+                );
+            }
+        }
+
         $this->ensurePlayingGameTrackedForTicks($game);
 
-        return json_decode($raw, true, flags: JSON_THROW_ON_ERROR);
+        return $state;
     }
 
     /**
@@ -534,12 +793,27 @@ final class GameManager
      */
     public function storeLiveState(Game $game, array $state): void
     {
+        // Terrain grids are the bulk of the state blob (~10× the mutable data). Strip them before
+        // every write. ensureStaticMapDataStored uses SETNX so it only writes once per game life.
+        $envData = $state['environment'] ?? [];
+        if (isset($envData['terrain'])) {
+            $this->ensureStaticMapDataStored($game, $envData);
+            foreach (['terrain', 'forest', 'defaultVision'] as $staticField) {
+                unset($state['environment'][$staticField]);
+            }
+        }
+
         Redis::set($this->redisKey($game), json_encode($state, JSON_THROW_ON_ERROR));
     }
 
     public function environmentFromState(array $state): Environment
     {
-        return Environment::fromArray($state['environment']);
+        $environment = Environment::fromArray($state['environment']);
+        // Vision is not persisted to Redis; rebuild it from current positions so that any
+        // subsequent drawInfo() call (snapshot, broadcast, recruit) sees correct fog-of-war.
+        $environment->recomputeVision();
+
+        return $environment;
     }
 
     /**
@@ -574,7 +848,17 @@ final class GameManager
         return $dirty;
     }
 
+    public function recruitTank(Game $game, GamePlayer $gamePlayer): void
+    {
+        $this->recruit($game, $gamePlayer, 'tank', GameConstants::ECONOMY_RECRUIT_COST_TANK);
+    }
+
     public function recruitInfantry(Game $game, GamePlayer $gamePlayer): void
+    {
+        $this->recruit($game, $gamePlayer, 'infantry', GameConstants::ECONOMY_RECRUIT_COST);
+    }
+
+    private function recruit(Game $game, GamePlayer $gamePlayer, string $troopType, int $cost): void
     {
         if ($game->status !== GameStatus::Playing) {
             abort(422, 'Recruiting is only available during a live match.');
@@ -611,7 +895,7 @@ final class GameManager
 
         $credits = (int) ($state['economy'][$slot]['credits'] ?? 0);
 
-        if ($credits < GameConstants::ECONOMY_RECRUIT_COST) {
+        if ($credits < $cost) {
             abort(422, 'Not enough credits to recruit.');
         }
 
@@ -623,9 +907,9 @@ final class GameManager
 
         $worldTick = (int) ($state['worldTick'] ?? 0);
         $troopId = $environment->takeNextTroopId();
-        $player->spawnTroop($spawn, [], $troopId, $worldTick);
+        $player->spawnTroop($spawn, [], $troopId, $worldTick, $troopType);
 
-        $state['economy'][$slot]['credits'] = $credits - GameConstants::ECONOMY_RECRUIT_COST;
+        $state['economy'][$slot]['credits'] = $credits - $cost;
         $state['environment'] = $environment->toArray();
 
         $this->touchPlayerActivityInState($state, $slot);
@@ -730,6 +1014,34 @@ final class GameManager
     private function redisKey(Game $game): string
     {
         return 'game:live:'.$game->uuid;
+    }
+
+    /**
+     * Key for the static terrain/grid data written once at game start.
+     * Separating it from the per-tick mutable state (~10× smaller writes).
+     */
+    private function redisMapKey(Game $game): string
+    {
+        return 'game:map:'.$game->uuid;
+    }
+
+    /**
+     * Writes the immutable terrain fields to a dedicated key. Uses SETNX so it is idempotent —
+     * safe to call on every {@see storeLiveState} when terrain is present in the environment array.
+     *
+     * @param  array<string, mixed>  $envArray
+     */
+    private function ensureStaticMapDataStored(Game $game, array $envArray): void
+    {
+        $staticFields = ['seed', 'playerCount', 'gridMaxX', 'gridMaxY', 'terrain', 'forest', 'defaultVision'];
+        $staticData = [];
+        foreach ($staticFields as $field) {
+            if (array_key_exists($field, $envArray)) {
+                $staticData[$field] = $envArray[$field];
+            }
+        }
+
+        Redis::setnx($this->redisMapKey($game), json_encode($staticData, JSON_THROW_ON_ERROR));
     }
 
     /**

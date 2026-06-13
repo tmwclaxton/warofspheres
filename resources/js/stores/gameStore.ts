@@ -1,8 +1,28 @@
-import { router } from '@inertiajs/vue3';
 import { defineStore } from 'pinia';
 import { createGameEcho } from '@/lib/echo';
-import { orders, recruit as recruitRoute } from '@/routes/games';
+import {
+    chat as chatRoute,
+    cityProduction as cityProductionRoute,
+    orders,
+    recruit as recruitRoute,
+    recruitTank as recruitTankRoute,
+} from '@/routes/games';
+import { useCameraStore } from '@/stores/cameraStore';
+import { useDraftStore } from '@/stores/draftStore';
 import { useToastStore } from '@/stores/toastStore';
+
+function csrfHeaders(): Record<string, string> {
+    const raw = document.cookie
+        .split('; ')
+        .find((row) => row.startsWith('XSRF-TOKEN='))
+        ?.split('=')[1];
+    return {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+        ...(raw ? { 'X-XSRF-TOKEN': decodeURIComponent(raw) } : {}),
+    };
+}
 
 type Point = [number, number];
 
@@ -19,6 +39,9 @@ type TroopState = {
     path: Point[];
     health: number;
     morale?: number;
+    type?: 'infantry' | 'tank';
+    maxHealth?: number;
+    isShip?: boolean;
     warmupMultiplier?: number;
     combatMultiplier?: number;
 };
@@ -30,19 +53,27 @@ type CityState = {
     path: Point[];
     ownerSlot: number | null;
     markerType?: string | null;
+    productionType?: 'infantry' | 'tank' | 'none';
+    productionTankRatio?: number;
+    productionSpeedMultiplier?: number;
+};
+
+type ChatMessage = {
+    id: number;
+    body: string;
+    senderName: string;
+    senderSlot: number;
+    createdAt: string;
 };
 
 type GameState = {
     vision: number[][];
-    border: number[][];
+    /** Compact territory ownership grid: territory[gx][gy] = player slot (−1 = neutral). */
+    territory: number[][];
+    /** Player colors indexed by slot: playerColors[slot] = [r, g, b]. */
+    playerColors: Record<number, number[]>;
     troops: TroopState[];
     cities: CityState[];
-};
-
-type DraftPath = {
-    entityId: number;
-    points: Point[];
-    kind: 'troop' | 'city';
 };
 
 export type GameDevDiagnostics = {
@@ -70,11 +101,6 @@ function emptyDevDiagnostics(): GameDevDiagnostics {
 function initialWorld() {
     return { width: 1280, height: 700, cellSize: 20 };
 }
-
-/** Canvas uses `scale(zoom)` then `translate(camX, camY)` so `sx = zoom * (wx + camX)`. */
-export const GAME_VIEW_ZOOM_MIN = 0.04;
-
-export const GAME_VIEW_ZOOM_MAX = 10;
 
 function coerceTerrainCellsFromSnapshot(
     raw: unknown,
@@ -141,15 +167,12 @@ export const useGameStore = defineStore('game', {
         latestState: null as GameState | null,
         economy: null as EconomySlot[] | null,
         worldTick: 0,
-        draftPaths: [] as DraftPath[],
-        activeDraft: null as DraftPath | null,
-        camX: 0,
-        camY: 0,
-        zoom: 1,
         winnerUserId: null as number | null,
         winnerSlot: null as number | null,
         winnerName: null as string | null,
         matchEnded: false,
+        chatMessages: [] as ChatMessage[],
+        unreadChatCount: 0,
         echo: null as ReturnType<typeof createGameEcho> | null,
         devDiagnostics: emptyDevDiagnostics(),
     }),
@@ -160,6 +183,8 @@ export const useGameStore = defineStore('game', {
             this.gameUuid = '';
             this.slot = 0;
             this.color = '#c0392b';
+            this.chatMessages = [];
+            this.unreadChatCount = 0;
             this.terrain = null;
             this.forest = null;
             this.terrainCells = null;
@@ -168,16 +193,14 @@ export const useGameStore = defineStore('game', {
             this.latestState = null;
             this.economy = null;
             this.worldTick = 0;
-            this.draftPaths = [];
-            this.activeDraft = null;
-            this.camX = 0;
-            this.camY = 0;
-            this.zoom = 1;
             this.winnerUserId = null;
             this.winnerSlot = null;
             this.winnerName = null;
             this.matchEnded = false;
             this.devDiagnostics = emptyDevDiagnostics();
+
+            useCameraStore().reset();
+            useDraftStore().reset();
         },
         connect(gameUuid: string, broadcastConnection: string, slot: number, color: string) {
             this.disconnect();
@@ -221,6 +244,10 @@ export const useGameStore = defineStore('game', {
                             : Number(payload.winnerSlot);
                     this.winnerName =
                         typeof payload.winnerName === 'string' ? payload.winnerName : null;
+                })
+                .listen('.ChatMessageSent', (payload: Record<string, unknown>) => {
+                    this.chatMessages.push(payload as unknown as ChatMessage);
+                    this.unreadChatCount++;
                 });
         },
         applySnapshotPayload(payload: Record<string, unknown>) {
@@ -256,13 +283,6 @@ export const useGameStore = defineStore('game', {
             }
 
             this.initialized = true;
-        },
-        async fetchSnapshotIfNeeded(url: string) {
-            if (this.initialized) {
-                return;
-            }
-
-            await this.pullSnapshot(url);
         },
         async pullSnapshot(url: string, options?: { treat404AsEnded?: boolean }) {
             const prevTick = this.worldTick;
@@ -323,122 +343,191 @@ export const useGameStore = defineStore('game', {
             this.echo = null;
             this.reset();
         },
-        beginPath(entityId: number, kind: 'troop' | 'city', start: Point) {
-            if (
-                this.activeDraft !== null &&
-                (this.activeDraft.entityId !== entityId || this.activeDraft.kind !== kind)
-            ) {
-                this.finishPath();
-            }
+        /** Sends empty-path orders for every own troop, stopping them in place. */
+        async stopAllTroops(gameUuid: string, snapshotFetchUrl?: string) {
+            const toast = useToastStore();
+            const troopOrders = (this.latestState?.troops ?? [])
+                .filter((t) => t.ownerSlot === this.slot)
+                .map((t) => [t.id, []] as [number, []]);
 
-            this.activeDraft = {
-                entityId,
-                kind,
-                points: [start],
-            };
-        },
-        extendPath(point: Point) {
-            if (!this.activeDraft) {
+            if (troopOrders.length === 0) {
                 return;
             }
 
-            const last = this.activeDraft.points.at(-1);
+            try {
+                const res = await fetch(orders(gameUuid).url, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: csrfHeaders(),
+                    body: JSON.stringify({ troop_orders: troopOrders, city_orders: [] }),
+                });
 
-            if (!last) {
-                return;
-            }
+                if (!res.ok) {
+                    toast.error('Could not send stop orders.');
+                    return;
+                }
 
-            const dx = point[0] - last[0];
-            const dy = point[1] - last[1];
-
-            /** ~5 CSS px in world units; a fixed world threshold is sub-pixel when zoomed out. */
-            const minSeg = Math.max(2, 5 / this.zoom);
-
-            if (Math.hypot(dx, dy) > minSeg) {
-                this.activeDraft.points.push(point);
+                if (snapshotFetchUrl !== undefined && snapshotFetchUrl.length > 0) {
+                    await this.pullSnapshot(snapshotFetchUrl);
+                }
+            } catch {
+                toast.error('Network error — stop failed.');
             }
         },
-        finishPath() {
-            if (!this.activeDraft) {
-                return;
-            }
 
-            if (this.activeDraft.points.length > 1) {
-                this.draftPaths = this.draftPaths.filter(
-                    (p) =>
-                        !(
-                            p.entityId === this.activeDraft!.entityId &&
-                            p.kind === this.activeDraft!.kind
-                        ),
-                );
-                this.draftPaths.push({ ...this.activeDraft });
-            }
+        async submitOrders(gameUuid: string, options?: { snapshotFetchUrl?: string }) {
+            const drafts = useDraftStore();
+            const toast = useToastStore();
 
-            this.activeDraft = null;
-        },
-        clearDrafts() {
-            this.draftPaths = [];
-            this.activeDraft = null;
-        },
-        /**
-         * Fit the whole battlefield in the view. Matches {@link GameCanvas} transform:
-         * screen = zoom * (world + cam).
-         */
-        fitCameraToView(cssWidth: number, cssHeight: number, margin = 0.94): void {
-            const ww = this.world.width;
-            const wh = this.world.height;
-
-            if (!(ww > 0 && wh > 0 && cssWidth > 0 && cssHeight > 0)) {
-                return;
-            }
-
-            const z = Math.min((cssWidth * margin) / ww, (cssHeight * margin) / wh);
-            this.zoom = Math.min(GAME_VIEW_ZOOM_MAX, Math.max(GAME_VIEW_ZOOM_MIN, z));
-            this.camX = cssWidth / (2 * this.zoom) - ww / 2;
-            this.camY = cssHeight / (2 * this.zoom) - wh / 2;
-        },
-        submitOrders(gameUuid: string, options?: { snapshotFetchUrl?: string }) {
-            const troopOrders = this.draftPaths
+            const troopOrders = drafts.draftPaths
                 .filter((p) => p.kind === 'troop')
                 .map((p) => [p.entityId, p.points] as [number, Point[]]);
-            const cityOrders = this.draftPaths
+            const cityOrders = drafts.draftPaths
                 .filter((p) => p.kind === 'city')
                 .map((p) => [p.entityId, p.points] as [number, Point[]]);
 
-            const toast = useToastStore();
-            const snapshotUrl = options?.snapshotFetchUrl;
+            try {
+                const res = await fetch(orders(gameUuid).url, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: csrfHeaders(),
+                    body: JSON.stringify({ troop_orders: troopOrders, city_orders: cityOrders }),
+                });
 
-            router.post(
-                orders(gameUuid).url,
-                {
-                    troop_orders: troopOrders,
-                    city_orders: cityOrders,
-                },
-                {
-                    preserveScroll: true,
-                    onError: (errors) => {
-                        const first =
-                            errors.troop_orders ??
-                            errors.city_orders ??
-                            Object.values(errors).find((v) => typeof v === 'string');
-                        const message =
-                            typeof first === 'string'
-                                ? first
-                                : 'Orders could not be submitted. Check you are in an active match and paths are valid.';
-                        toast.error(message);
-                    },
-                    onSuccess: async () => {
-                        this.clearDrafts();
+                if (!res.ok) {
+                    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+                    const errors = data.errors as Record<string, string> | undefined;
+                    const message =
+                        errors?.troop_orders ??
+                        errors?.city_orders ??
+                        (typeof data.message === 'string' ? data.message : null) ??
+                        'Orders could not be submitted.';
+                    toast.error(message);
+                    return;
+                }
 
-                        if (snapshotUrl !== undefined && snapshotUrl.length > 0) {
-                            await this.pullSnapshot(snapshotUrl);
-                        }
-                    },
-                },
-            );
+                drafts.clearDrafts();
+
+                const snapshotUrl = options?.snapshotFetchUrl;
+                if (snapshotUrl !== undefined && snapshotUrl.length > 0) {
+                    await this.pullSnapshot(snapshotUrl);
+                }
+            } catch {
+                toast.error('Network error — orders not submitted.');
+            }
         },
-        recruitInfantry(gameUuid: string) {
-            router.post(recruitRoute({ game: gameUuid }).url, {}, { preserveScroll: true });
+        async recruitInfantry(gameUuid: string, options?: { snapshotFetchUrl?: string }) {
+            await this._recruit(recruitRoute({ game: gameUuid }).url, 'Infantry recruited.', options);
+        },
+
+        async recruitTank(gameUuid: string, options?: { snapshotFetchUrl?: string }) {
+            await this._recruit(recruitTankRoute({ game: gameUuid }).url, 'Tank deployed.', options);
+        },
+
+        clearUnreadChat() {
+            this.unreadChatCount = 0;
+        },
+
+        async sendChatMessage(gameUuid: string, body: string) {
+            const toast = useToastStore();
+
+            if (!body.trim()) {
+                return;
+            }
+
+            try {
+                const res = await fetch(chatRoute({ game: gameUuid }).url, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { ...csrfHeaders(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ body }),
+                });
+
+                if (!res.ok) {
+                    toast.error('Could not send message.');
+                }
+            } catch {
+                toast.error('Network error — chat failed.');
+            }
+        },
+
+        async setCityProduction(
+            gameUuid: string,
+            cityId: number,
+            productionType: 'infantry' | 'tank' | 'none',
+            tankRatio?: number,
+            speedMultiplier?: number,
+            options?: { snapshotFetchUrl?: string },
+        ) {
+            const toast = useToastStore();
+
+            try {
+                const body: Record<string, unknown> = {
+                    city_id: cityId,
+                };
+
+                if (tankRatio !== undefined) {
+                    body.production_tank_ratio = tankRatio;
+                }
+
+                if (speedMultiplier !== undefined) {
+                    body.production_speed_multiplier = speedMultiplier;
+                }
+
+                const res = await fetch(cityProductionRoute({ game: gameUuid }).url, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { ...csrfHeaders(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+
+                if (!res.ok) {
+                    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+                    const message =
+                        typeof data.message === 'string' ? data.message : 'Could not change production.';
+                    toast.error(message);
+                    return;
+                }
+
+                const snapshotUrl = options?.snapshotFetchUrl;
+                if (snapshotUrl !== undefined && snapshotUrl.length > 0) {
+                    await this.pullSnapshot(snapshotUrl);
+                }
+            } catch {
+                toast.error('Network error — production change failed.');
+            }
+        },
+
+        async _recruit(url: string, successMessage: string, options?: { snapshotFetchUrl?: string }) {
+            const toast = useToastStore();
+
+            try {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: csrfHeaders(),
+                    body: JSON.stringify({}),
+                });
+
+                if (!res.ok) {
+                    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+                    const message =
+                        typeof data.message === 'string'
+                            ? data.message
+                            : 'Could not recruit — check your credits and army size.';
+                    toast.error(message);
+                    return;
+                }
+
+                toast.success(successMessage);
+
+                const snapshotUrl = options?.snapshotFetchUrl;
+                if (snapshotUrl !== undefined && snapshotUrl.length > 0) {
+                    await this.pullSnapshot(snapshotUrl);
+                }
+            } catch {
+                toast.error('Network error — recruit failed.');
+            }
         },
     },
 });

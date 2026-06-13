@@ -31,6 +31,11 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Docker image
+        env:
+          VITE_REVERB_APP_KEY: ${{ secrets.VITE_REVERB_APP_KEY }}
+          VITE_REVERB_HOST: ${{ secrets.VITE_REVERB_HOST }}
+          VITE_REVERB_PORT: ${{ secrets.VITE_REVERB_PORT }}
+          VITE_REVERB_SCHEME: ${{ secrets.VITE_REVERB_SCHEME }}
         run: |
           export DOCKER_BUILDKIT=1
           docker pull "$IMAGE_REF" || true
@@ -40,6 +45,10 @@ jobs:
             --build-arg BUILDKIT_INLINE_CACHE=1 \
             --build-arg WWWGROUP=$(id -g) \
             --build-arg WWWUSER=$UID \
+            --build-arg VITE_REVERB_APP_KEY="${VITE_REVERB_APP_KEY}" \
+            --build-arg VITE_REVERB_HOST="${VITE_REVERB_HOST}" \
+            --build-arg VITE_REVERB_PORT="${VITE_REVERB_PORT}" \
+            --build-arg VITE_REVERB_SCHEME="${VITE_REVERB_SCHEME}" \
             --tag "$IMAGE_REF" .
 
       - name: Push Docker image to GHCR

@@ -14,6 +14,15 @@ final class City
     /** @var list<array{0: float, 1: float}> */
     public array $path = [];
 
+    /** What unit type this city auto-produces: `infantry`, `tank`, or `none`. */
+    public string $productionType = 'infantry';
+
+    /** Tank production ratio: 0-100 (0 = always infantry, 100 = always tanks). */
+    public int $productionTankRatio = 0;
+
+    /** Production speed multiplier: 0-3.0 (0 = idle/none, lower > 0 = faster spawns). */
+    public float $productionSpeedMultiplier = 1.0;
+
     /**
      * @param  array{0: float, 1: float}  $position
      */
@@ -37,6 +46,9 @@ final class City
             'ownerSlot' => $this->owner?->slot,
             'path' => $this->path,
             'markerType' => $this->markerType,
+            'productionType' => $this->productionType,
+            'productionTankRatio' => $this->productionTankRatio,
+            'productionSpeedMultiplier' => $this->productionSpeedMultiplier,
         ];
     }
 
@@ -49,6 +61,10 @@ final class City
         $city = new self($data['position'], $data['id'], is_string($marker) ? $marker : null);
         $city->timer = $data['timer'];
         $city->path = $data['path'] ?? [];
+        $rawProduction = $data['productionType'] ?? 'infantry';
+        $city->productionType = in_array($rawProduction, ['infantry', 'tank', 'none']) ? $rawProduction : 'infantry';
+        $city->productionTankRatio = max(0, min(100, (int) ($data['productionTankRatio'] ?? 0)));
+        $city->productionSpeedMultiplier = max(0.0, min(3.0, (float) ($data['productionSpeedMultiplier'] ?? 1.0)));
 
         if ($data['ownerSlot'] !== null) {
             $city->owner = $environment->players[$data['ownerSlot']] ?? null;

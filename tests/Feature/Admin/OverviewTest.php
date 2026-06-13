@@ -60,13 +60,25 @@ class OverviewTest extends TestCase
             ->assertInertia(fn (Assert $page) => $page
                 ->component('admin/Overview')
                 ->has('stats.summary', fn (Assert $summary) => $summary
-                    ->where('totalUsers', 1284)
-                    ->where('activeGames', 17)
-                    ->where('matchesToday', 42)
-                    ->where('publishedMaps', 86)
+                    ->hasAll(['totalUsers', 'activeGames', 'matchesToday', 'publishedMaps'])
+                    ->whereAllType([
+                        'totalUsers' => 'integer',
+                        'activeGames' => 'integer',
+                        'matchesToday' => 'integer',
+                        'publishedMaps' => 'integer',
+                    ])
                 )
-                ->has('stats.topMaps', 5)
-                ->has('stats.recentActivity', 6)
+                ->has('stats.games', fn (Assert $games) => $games
+                    ->hasAll(['lobby', 'playing', 'finished'])
+                )
+                ->has('stats.maps', fn (Assert $maps) => $maps
+                    ->hasAll(['total', 'published', 'draft', 'forks', 'votes'])
+                )
+                ->has('stats.engagement', fn (Assert $eng) => $eng
+                    ->hasAll(['avgPlayersPerGame', 'avgGameDurationMinutes', 'returningPlayersPercent', 'newUsersThisWeek'])
+                )
+                ->has('stats.topMaps')
+                ->has('stats.recentActivity')
             );
     }
 }

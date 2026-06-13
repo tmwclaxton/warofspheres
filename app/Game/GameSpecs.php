@@ -145,6 +145,10 @@ final class GameSpecs
                 'infantry' => ['speed' => 0.4, 'attack' => 0.07, 'defense' => 0.95],
                 'tank' => ['speed' => 0.35, 'attack' => 0.14, 'defense' => 0.95],
             ],
+            'snow' => [
+                'infantry' => ['speed' => 0.35, 'attack' => 0.07, 'defense' => 1.0],
+                'tank' => ['speed' => 0.20, 'attack' => 0.12, 'defense' => 1.0],
+            ],
         ];
     }
 
@@ -166,6 +170,7 @@ final class GameSpecs
             'swamp' => 'Boggy wetland. Mud-like penalties slow everyone and reduce damage output.',
             'desert' => 'Sandy dunes. Tanks move as fast as infantry - the best heavy-unit terrain.',
             'beach' => 'Coastal sand. Minor slowdown; still favorable for tanks approaching landings.',
+            'snow' => 'Frozen tundra. Icy ground slows all movement and chills attack output; tanks are hit hardest.',
         ];
     }
 
@@ -208,6 +213,34 @@ final class GameSpecs
                 'description' => 'Rugged highlands with valleys linked by carved mountain passes.',
                 'traits' => ['Elevated chokepoints', 'Pass carving', 'Fewer open flanking routes'],
                 'preview' => '/images/wiki/map-generation-mountains.svg',
+            ],
+            [
+                'id' => 'jungle',
+                'label' => 'Jungle',
+                'description' => 'Impenetrable rainforest canopy threaded by winding rivers and swampland.',
+                'traits' => ['Dense forest cover', 'Rivers and swamp', 'Tanks heavily penalised'],
+                'preview' => '/images/wiki/map-generation-jungle.svg',
+            ],
+            [
+                'id' => 'volcanic',
+                'label' => 'Volcanic',
+                'description' => 'Smouldering mountain peaks surrounded by vast ash fields and hardened lava rock.',
+                'traits' => ['Dominant mountain peaks', 'Ash-field desert lowlands', 'No rivers'],
+                'preview' => '/images/wiki/map-generation-volcanic.svg',
+            ],
+            [
+                'id' => 'tundra',
+                'label' => 'Tundra',
+                'description' => 'Frozen wastes of open plains and sparse taiga beneath jagged ice-capped peaks.',
+                'traits' => ['Wide open plains', 'Sparse forest', 'No rivers'],
+                'preview' => '/images/wiki/map-generation-tundra.svg',
+            ],
+            [
+                'id' => 'grassland',
+                'label' => 'Grassland',
+                'description' => 'Sweeping open meadows and plains with scattered forests, gentle rivers, and almost no mountains.',
+                'traits' => ['Flat open terrain', 'Rivers and meadows', 'Tank-friendly'],
+                'preview' => '/images/wiki/map-generation-grassland.svg',
             ],
         ];
     }

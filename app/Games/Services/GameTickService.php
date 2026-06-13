@@ -7,6 +7,7 @@ use App\Games\Engine\City;
 use App\Games\Engine\Environment;
 use App\Games\GameConstants;
 use App\Models\Game;
+use App\Models\GameReplaySnapshot;
 
 final class GameTickService
 {
@@ -59,9 +60,77 @@ final class GameTickService
         $manager->storeLiveState($game, $state);
         $manager->broadcastState($game, $environment, $state);
 
+        // Write a replay snapshot once per second (every TICK_RATE ticks).
+        if ($worldTick % GameConstants::TICK_RATE === 0) {
+            $this->writeReplaySnapshot($game, $worldTick, $state, $manager);
+        }
+
         $winnerSlot = $environment->winnerSlot();
         if ($winnerSlot !== null) {
             $manager->finish($game, $winnerSlot);
+        }
+    }
+
+    /**
+     * Writes an omniscient (all-visibility) snapshot so the replay viewer sees all units.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    private function writeReplaySnapshot(Game $game, int $worldTick, array $state, GameManager $manager): void
+    {
+        try {
+            $environment = $manager->environmentFromState($state);
+            // Build spectator view: all troops visible, no fog.
+            $allTroops = [];
+            foreach ($environment->players as $player) {
+                foreach ($player->troops as $troop) {
+                    $warmup = $environment->troopWarmupMultiplier($troop, $worldTick);
+                    $moraleFac = max(0.25, $troop->morale / 100.0);
+                    $allTroops[] = [
+                        'position' => $troop->position,
+                        'color' => $troop->owner->color,
+                        'id' => $troop->id,
+                        'ownerSlot' => $troop->owner->slot,
+                        'path' => $troop->path,
+                        'health' => $troop->health,
+                        'morale' => $troop->morale,
+                        'type' => $troop->type,
+                        'maxHealth' => $troop->maxHealth(),
+                        'isShip' => $troop->isShip,
+                        'warmupMultiplier' => round($warmup, 3),
+                        'combatMultiplier' => round($warmup * $moraleFac, 3),
+                    ];
+                }
+            }
+
+            $allCities = array_map(fn ($c) => [
+                'ownerColor' => $c->owner?->color,
+                'position' => $c->position,
+                'id' => $c->id,
+                'path' => $c->path,
+                'ownerSlot' => $c->owner?->slot,
+                'markerType' => $c->markerType,
+                'productionType' => $c->productionType,
+                'productionTankRatio' => $c->productionTankRatio,
+                'productionSpeedMultiplier' => $c->productionSpeedMultiplier,
+            ], $environment->cities);
+
+            $viewState = [
+                'vision' => [],
+                'border' => [],
+                'troops' => $allTroops,
+                'cities' => $allCities,
+            ];
+
+            $snapshot = ['latestState' => $viewState, 'economy' => $state['economy'] ?? null];
+
+            GameReplaySnapshot::create([
+                'game_id' => $game->id,
+                'world_tick' => $worldTick,
+                'state_json' => GameReplaySnapshot::encodeState($snapshot),
+            ]);
+        } catch (\Throwable) {
+            // Replay writes are best-effort; never let them break the game loop.
         }
     }
 

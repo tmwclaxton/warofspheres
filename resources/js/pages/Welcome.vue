@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Head, Link, usePage } from '@inertiajs/vue3';
-import { BookOpen, Github, Trophy, Users } from 'lucide-vue-next';
+import { BookOpen, Github, Swords, Trophy, Users } from 'lucide-vue-next';
 import { Button, buttonVariants } from '@/components/ui/button';
 import GameLogoMark from '@/components/GameLogoMark.vue';
 import ThemeToggle from '@/components/ThemeToggle.vue';
@@ -188,9 +188,12 @@ const steps = [
                             </em>.
                         </p>
                         <div class="mt-6 flex w-full min-w-0 flex-col gap-3 sm:mt-7 sm:flex-row sm:flex-wrap">
-                            <Link :href="lobbiesIndex().url" class="w-full sm:w-auto">
-                                <Button class="w-full sm:w-auto" size="lg">Enter the battlefield</Button>
-                            </Link>
+                            <Button as-child class="w-full sm:w-auto" size="lg">
+                                <Link :href="lobbiesIndex().url">
+                                    <Swords class="size-5" />
+                                    Enter the battlefield
+                                </Link>
+                            </Button>
                             <Link
                                 v-if="!page.props.auth.user"
                                 :href="login().url"
@@ -267,9 +270,12 @@ const steps = [
                     </p>
                 </div>
                 <div class="flex w-full min-w-0 shrink-0 flex-col gap-2 sm:w-auto sm:items-end">
-                    <Link :href="lobbiesIndex().url" class="w-full sm:w-auto">
-                        <Button class="w-full sm:w-auto" size="lg">Browse lobbies</Button>
-                    </Link>
+                    <Button as-child class="w-full sm:w-auto" size="lg">
+                        <Link :href="lobbiesIndex().url">
+                            <Users class="size-5" />
+                            Browse lobbies
+                        </Link>
+                    </Button>
                     <Link
                         v-if="!page.props.auth.user"
                         :href="login().url"

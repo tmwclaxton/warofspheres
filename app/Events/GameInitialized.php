@@ -5,11 +5,11 @@ namespace App\Events;
 use App\Models\Game;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PrivateChannel;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
-class GameInitialized implements ShouldBroadcastNow
+class GameInitialized implements ShouldBroadcast
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 

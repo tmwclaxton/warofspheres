@@ -2,16 +2,20 @@
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useIsDark } from '@/composables/useIsDark';
 import {
+    drawCapitalAtPixel,
+    drawInfantryAtPixel,
+    drawOutpostAtPixel,
+    drawTankAtPixel,
+} from '@/lib/mapMarkers';
+import {
     editorBlendedTerrainFillStyle,
     editorTerrainDimOverlayFill,
     ENGINE_FOREST_THRESHOLD,
     engineCellFillStyle,
 } from '@/lib/terrainRender';
-import {
-    GAME_VIEW_ZOOM_MAX,
-    GAME_VIEW_ZOOM_MIN,
-    useGameStore,
-} from '@/stores/gameStore';
+import { GAME_VIEW_ZOOM_MAX, GAME_VIEW_ZOOM_MIN, useCameraStore } from '@/stores/cameraStore';
+import { useDraftStore } from '@/stores/draftStore';
+import { useGameStore } from '@/stores/gameStore';
 
 const props = withDefaults(
     defineProps<{
@@ -22,8 +26,11 @@ const props = withDefaults(
     { readOnly: false, snapshotFetchUrl: '' },
 );
 
+
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const store = useGameStore();
+const camera = useCameraStore();
+const drafts = useDraftStore();
 const { isDark } = useIsDark();
 
 let dragging = false;
@@ -31,6 +38,56 @@ let panning = false;
 let lastMouse: [number, number] = [0, 0];
 let terrainCanvas: HTMLCanvasElement | null = null;
 let resizeObserver: ResizeObserver | null = null;
+let rafId: number | null = null;
+let needsRedraw = false;
+let lastRafTimeMs = 0;
+
+/**
+ * Smooth movement: display positions continuously chase server target positions
+ * at SMOOTH_SPEED_WU_MS world units per millisecond.
+ * Chosen to be slightly faster than the max game speed so troops always catch up
+ * before the next snapshot, giving fluid motion at any update frequency.
+ */
+const SMOOTH_SPEED_WU_MS = 0.028; // ~28 wu/sec display speed (game plains = 22.5 wu/sec)
+const troopDisplayPositions = new Map<number, [number, number]>();
+const troopTargetPositions = new Map<number, [number, number]>();
+
+/** Lasso selection state. */
+let lassoStart: [number, number] | null = null;
+let lassoCurrent: [number, number] | null = null;
+let lassoActive = false;
+
+/** Touch state for single-finger drafting and two-finger pan/pinch-zoom. */
+let touchDrafting = false;
+let touchPanning = false;
+let lastTouchMid: [number, number] = [0, 0];
+let lastTouchDist = 0;
+
+function getTouchCoords(
+    canvas: HTMLCanvasElement,
+    touch: Touch,
+): [number, number] {
+    const rect = canvas.getBoundingClientRect();
+    return [touch.clientX - rect.left, touch.clientY - rect.top];
+}
+
+function touchDistance(t1: Touch, t2: Touch): number {
+    const dx = t1.clientX - t2.clientX;
+    const dy = t1.clientY - t2.clientY;
+    return Math.hypot(dx, dy);
+}
+
+function touchMidpoint(
+    canvas: HTMLCanvasElement,
+    t1: Touch,
+    t2: Touch,
+): [number, number] {
+    const rect = canvas.getBoundingClientRect();
+    return [
+        (t1.clientX + t2.clientX) / 2 - rect.left,
+        (t1.clientY + t2.clientY) / 2 - rect.top,
+    ];
+}
 
 /** One-shot fit when a match snapshot first fills the store (per game uuid). */
 const initialFitDone = ref(false);
@@ -52,7 +109,7 @@ function tryInitialCameraFit(): void {
         return;
     }
 
-    store.fitCameraToView(r.width, r.height);
+    camera.fitCameraToView(store.world.width, store.world.height, r.width, r.height);
     initialFitDone.value = true;
     bakeTerrain();
     draw();
@@ -127,9 +184,46 @@ function bakeTerrain() {
 }
 
 function screenToWorld(x: number, y: number): [number, number] {
-    const z = store.zoom;
+    return [x / camera.zoom - camera.camX, y / camera.zoom - camera.camY];
+}
 
-    return [x / z - store.camX, y / z - store.camY];
+function worldToScreen(wx: number, wy: number): [number, number] {
+    return [(wx + camera.camX) * camera.zoom, (wy + camera.camY) * camera.zoom];
+}
+
+function scheduleRedraw(): void {
+    needsRedraw = true;
+}
+
+function rafLoop(nowMs: number): void {
+    const dt = lastRafTimeMs > 0 ? Math.min(nowMs - lastRafTimeMs, 100) : 0;
+    lastRafTimeMs = nowMs;
+
+    // Advance each troop's display position toward its server target.
+    let anyMoving = false;
+    for (const [id, target] of troopTargetPositions) {
+        const display = troopDisplayPositions.get(id);
+        if (!display) {
+            troopDisplayPositions.set(id, [target[0], target[1]]);
+            continue;
+        }
+        const dx = target[0] - display[0];
+        const dy = target[1] - display[1];
+        const dist = Math.hypot(dx, dy);
+        if (dist > 0.5) {
+            anyMoving = true;
+            const step = Math.min(dist, SMOOTH_SPEED_WU_MS * dt);
+            display[0] += (dx / dist) * step;
+            display[1] += (dy / dist) * step;
+        }
+    }
+
+    if (needsRedraw || anyMoving) {
+        needsRedraw = false;
+        draw();
+    }
+
+    rafId = requestAnimationFrame(rafLoop);
 }
 
 function draw() {
@@ -154,8 +248,8 @@ function draw() {
     ctx.fillRect(0, 0, rect.width, rect.height);
 
     ctx.save();
-    ctx.scale(store.zoom, store.zoom);
-    ctx.translate(store.camX, store.camY);
+    ctx.scale(camera.zoom, camera.zoom);
+    ctx.translate(camera.camX, camera.camY);
 
     if (terrainCanvas) {
         ctx.imageSmoothingEnabled = false;
@@ -165,9 +259,8 @@ function draw() {
     const state = store.latestState;
 
     if (state) {
-        drawFog(ctx, state.vision);
-        drawBorders(ctx, state.border);
-        drawBorderStrokes(ctx, state.border);
+        drawFog(ctx, state.vision, state.territory);  // dims enemy territory only
+        drawTerritory(ctx, state.territory, state.playerColors); // battle lines on top
     }
 
     for (const city of state?.cities ?? store.cityPositions.map((p, i) => ({
@@ -182,113 +275,260 @@ function draw() {
     }
 
     for (const troop of state?.troops ?? []) {
-        drawTroop(ctx, troop);
+        const isSelected = drafts.selectedTroopIds.includes(troop.id);
+        const display = troopDisplayPositions.get(troop.id) ?? troop.position;
+        drawTroop(ctx, { ...troop, position: display }, isSelected);
     }
 
-    for (const draft of store.draftPaths) {
+    for (const draft of drafts.draftPaths) {
         drawArrowPath(ctx, draft.points);
     }
 
-    if (store.activeDraft) {
-        drawArrowPath(ctx, store.activeDraft.points, true);
+    if (drafts.activeDraft) {
+        drawArrowPath(ctx, drafts.activeDraft.points, true);
+    }
+
+    ctx.restore();
+
+    // Lasso rectangle overlay (screen-space, outside world transform).
+    if (lassoActive && lassoStart && lassoCurrent) {
+        const [x1, y1] = lassoStart;
+        const [x2, y2] = lassoCurrent;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([5, 3]);
+        ctx.fillStyle = 'rgba(255,255,255,0.08)';
+        ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        ctx.setLineDash([]);
+        ctx.restore();
+    }
+}
+
+/**
+ * Fog of war — dims cells outside the viewing player's vision.
+ *
+ * Drawn BEFORE territory lines so the battle-front stays readable even at
+ * the edge of visibility.  Uses a medium-opacity fill adapted to dark/light
+ * mode so the terrain is still faintly perceptible rather than pitch-black.
+ */
+function drawFog(
+    ctx: CanvasRenderingContext2D,
+    vision: number[][] | undefined,
+    territory: number[][] | undefined,
+) {
+    if (!vision?.length || !vision[0]?.length) return;
+
+    const { cellSize } = store.world;
+    const w = vision.length - 1;
+    const h = vision[0].length - 1;
+    const mySlot = store.slot;
+
+    ctx.save();
+    ctx.fillStyle = isDark.value
+        ? 'rgba(10, 8, 5, 0.68)'
+        : 'rgba(180, 168, 150, 0.58)';
+
+    for (let gx = 0; gx < w; gx++) {
+        for (let gy = 0; gy < h; gy++) {
+            // Only fog cells that are in enemy territory — own backfield stays clear.
+            const owner = territory?.[gx]?.[gy] ?? -1;
+            if (owner !== mySlot && vision[gx][gy] < ENGINE_FOREST_THRESHOLD) {
+                ctx.fillRect(gx * cellSize, gy * cellSize, cellSize, cellSize);
+            }
+        }
     }
 
     ctx.restore();
 }
 
-function drawFog(ctx: CanvasRenderingContext2D, vision: number[][]) {
-    const { cellSize } = store.world;
-    ctx.fillStyle = 'rgba(20, 18, 14, 0.72)';
-
-    for (let gy = 0; gy < vision[0].length - 1; gy++) {
-        for (let gx = 0; gx < vision.length - 1; gx++) {
-            const v = vision[gx][gy];
-
-            if (v < ENGINE_FOREST_THRESHOLD) {
-                ctx.fillRect(gx * cellSize, gy * cellSize, cellSize, cellSize);
-            }
-        }
-    }
-}
-
-function drawBorders(ctx: CanvasRenderingContext2D, border: number[][]) {
-    const { cellSize } = store.world;
-    ctx.fillStyle = 'rgba(241, 196, 15, 0.08)';
-
-    for (let gy = 0; gy < border[0].length - 1; gy++) {
-        for (let gx = 0; gx < border.length - 1; gx++) {
-            if (border[gx][gy] > 0.35) {
-                ctx.fillRect(gx * cellSize, gy * cellSize, cellSize, cellSize);
-            }
-        }
-    }
-}
-
-function drawBorderStrokes(ctx: CanvasRenderingContext2D, border: number[][]) {
-    if (!border.length || !border[0]?.length) {
+/**
+ * Draws smooth territory-boundary lines across the whole map.
+ *
+ * Every cell is owned by whoever has the highest border influence
+ * (no threshold — the whole map is always fully divided).  Only the
+ * boundary lines are drawn; no fill, so the terrain stays fully visible.
+ *
+ * Algorithm
+ * ---------
+ * 1. Collect every boundary edge: the shared side between two cells
+ *    owned by different players.  Each edge is a segment between two
+ *    grid corners at pixel position (cx*cellSize, cy*cellSize).
+ * 2. Build a corner adjacency graph, then walk it greedily — preferring
+ *    straight continuation at junctions — to assemble edges into the
+ *    longest possible polylines.
+ * 3. Render each polyline using quadratic-Bézier midpoint smoothing:
+ *    straight stretches stay perfectly straight; direction-changes
+ *    become smooth arcs — the "marker-pen on a map" aesthetic.
+ */
+function drawTerritory(
+    ctx: CanvasRenderingContext2D,
+    territory: number[][] | undefined,
+    playerColors: Record<number, number[]> | undefined,
+) {
+    if (!territory?.length || !territory[0]?.length || !playerColors) {
         return;
     }
 
     const { cellSize } = store.world;
-    const thr = 0.35;
-    const w = border.length;
-    const h = border[0].length;
+    const w = territory.length;
+    const h = territory[0].length;
 
-    const hi = (gx: number, gy: number): boolean => {
-        if (gx < 0 || gy < 0 || gx >= w || gy >= h) {
-            return false;
-        }
+    // ── 1. Build boundary-edge graph ────────────────────────────────────────
+    // Corner (cx, cy) has pixel position (cx*cellSize, cy*cellSize).
+    // Corners are indexed as:  cx * (h + 1) + cy
 
-        return border[gx][gy] > thr;
-    };
+    const cH = h + 1; // stride for corner-index encoding
+    // adjacency: cornerIndex → Set<neighborCornerIndex>
+    const adj = new Map<number, Set<number>>();
 
-    ctx.save();
-    ctx.strokeStyle = 'rgba(241, 196, 15, 0.42)';
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
+    function ci(cx: number, cy: number): number {
+        return cx * cH + cy;
+    }
 
-    for (let gy = 0; gy < h; gy++) {
-        for (let gx = 0; gx < w; gx++) {
-            if (!hi(gx, gy)) {
-                continue;
+    function link(cx1: number, cy1: number, cx2: number, cy2: number): void {
+        const a = ci(cx1, cy1);
+        const b = ci(cx2, cy2);
+        if (!adj.has(a)) adj.set(a, new Set());
+        if (!adj.has(b)) adj.set(b, new Set());
+        adj.get(a)!.add(b);
+        adj.get(b)!.add(a);
+    }
+
+    for (let gx = 0; gx < w; gx++) {
+        for (let gy = 0; gy < h; gy++) {
+            const owner = territory[gx][gy];
+            // horizontal edge: boundary below this cell
+            if (gy + 1 < h && territory[gx][gy + 1] !== owner) {
+                link(gx, gy + 1, gx + 1, gy + 1);
             }
-
-            const x = gx * cellSize;
-            const y = gy * cellSize;
-            const strength = border[gx][gy];
-
-            if (!hi(gx, gy - 1)) {
-                ctx.moveTo(x, y);
-                ctx.lineTo(x + cellSize, y);
-            }
-
-            if (!hi(gx, gy + 1)) {
-                ctx.moveTo(x, y + cellSize);
-                ctx.lineTo(x + cellSize, y + cellSize);
-            }
-
-            if (!hi(gx - 1, gy)) {
-                ctx.moveTo(x, y);
-                ctx.lineTo(x, y + cellSize);
-            }
-
-            if (!hi(gx + 1, gy)) {
-                ctx.moveTo(x + cellSize, y);
-                ctx.lineTo(x + cellSize, y + cellSize);
-            }
-
-            if (strength > 0.72 && (gx + gy) % 3 === 0) {
-                const jx = ((gx * 47 + gy * 13) % 5) - 2;
-                const jy = ((gx * 19 + gy * 59) % 5) - 2;
-                ctx.moveTo(x + cellSize * 0.2 + jx, y + cellSize * 0.2 + jy);
-                ctx.lineTo(x + cellSize * 0.85 + jx, y + cellSize * 0.85 + jy);
+            // vertical edge: boundary to the right of this cell
+            if (gx + 1 < w && territory[gx + 1][gy] !== owner) {
+                link(gx + 1, gy, gx + 1, gy + 1);
             }
         }
     }
 
-    ctx.stroke();
+    // ── 3. Trace polylines ──────────────────────────────────────────────────
+    const usedEdges = new Set<string>();
+
+    function ek(a: number, b: number): string {
+        return a < b ? `${a}|${b}` : `${b}|${a}`;
+    }
+
+    function cpx(idx: number): [number, number] {
+        const cx = Math.floor(idx / cH);
+        const cy = idx % cH;
+        return [cx * cellSize, cy * cellSize];
+    }
+
+    const polylines: [number, number][][] = [];
+
+    // Prefer to start from endpoints (corners with odd degree) so closed
+    // loops are handled after all open paths are exhausted.
+    const starts: number[] = [];
+    for (const [c, nbrs] of adj) {
+        if (nbrs.size % 2 !== 0) starts.push(c); // open-path endpoint
+    }
+    for (const [c] of adj) {
+        starts.push(c); // ensures closed loops are also picked up
+    }
+
+    for (const seed of starts) {
+        const seedNbrs = adj.get(seed);
+        if (!seedNbrs) continue;
+
+        for (const firstNbr of seedNbrs) {
+            const eKey = ek(seed, firstNbr);
+            if (usedEdges.has(eKey)) continue;
+
+            // Walk the path greedily, preferring to continue straight when at
+            // an X-junction by picking the neighbour most "in-line" with the
+            // incoming direction.
+            const poly: [number, number][] = [];
+            poly.push(cpx(seed));
+
+            let prev = seed;
+            let cur = firstNbr;
+            usedEdges.add(eKey);
+
+            while (true) {
+                poly.push(cpx(cur));
+                const nbrs = adj.get(cur);
+                if (!nbrs) break;
+
+                // Compute incoming direction to prefer straight continuation.
+                const [px0, py0] = cpx(prev);
+                const [cx0, cy0] = cpx(cur);
+                const dx = cx0 - px0;
+                const dy = cy0 - py0;
+
+                let bestNext = -1;
+                let bestDot = -Infinity;
+
+                for (const n of nbrs) {
+                    if (usedEdges.has(ek(cur, n))) continue;
+                    const [nx, ny] = cpx(n);
+                    const ndx = nx - cx0;
+                    const ndy = ny - cy0;
+                    // Dot product with incoming direction (higher = more straight)
+                    const dot = dx * ndx + dy * ndy;
+                    if (dot > bestDot) {
+                        bestDot = dot;
+                        bestNext = n;
+                    }
+                }
+
+                if (bestNext === -1) break;
+
+                usedEdges.add(ek(cur, bestNext));
+                prev = cur;
+                cur = bestNext;
+            }
+
+            if (poly.length >= 2) {
+                polylines.push(poly);
+            }
+        }
+    }
+
+    // ── 3. Draw polylines with Bézier midpoint smoothing ────────────────────
+    ctx.save();
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = canvasInk();
+    ctx.globalAlpha = 0.55;
+    ctx.shadowColor = 'rgba(0,0,0,0.3)';
+    ctx.shadowBlur = 3;
+
+    for (const poly of polylines) {
+        if (poly.length < 2) continue;
+        ctx.beginPath();
+
+        if (poly.length === 2) {
+            ctx.moveTo(poly[0][0], poly[0][1]);
+            ctx.lineTo(poly[1][0], poly[1][1]);
+        } else {
+            // Midpoint-smoothing: straight sections stay straight;
+            // direction-changes become quadratic Bézier arcs.
+            const mx0 = (poly[0][0] + poly[1][0]) / 2;
+            const my0 = (poly[0][1] + poly[1][1]) / 2;
+            ctx.moveTo(mx0, my0);
+
+            for (let i = 1; i < poly.length - 1; i++) {
+                const mx = (poly[i][0] + poly[i + 1][0]) / 2;
+                const my = (poly[i][1] + poly[i + 1][1]) / 2;
+                ctx.quadraticCurveTo(poly[i][0], poly[i][1], mx, my);
+            }
+
+            ctx.lineTo(poly[poly.length - 1][0], poly[poly.length - 1][1]);
+        }
+
+        ctx.stroke();
+    }
+
     ctx.restore();
 }
 
@@ -299,37 +539,13 @@ function drawCity(
     markerType?: string | null,
 ) {
     const [x, y] = position;
-    ctx.fillStyle = color ? rgb(color) : '#f1c40f';
+    const fill = color ? rgb(color) : '#f1c40f';
 
     if (markerType === 'capital') {
-        const s = 14;
-        ctx.fillRect(x - s / 2, y - s / 2, s, s);
-        ctx.strokeStyle = canvasInk();
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x - s / 2, y - s / 2, s, s);
-
-        return;
+        drawCapitalAtPixel(ctx, x, y, fill, 15);
+    } else {
+        drawOutpostAtPixel(ctx, x, y, fill, 13);
     }
-
-    ctx.beginPath();
-
-    for (let i = 0; i < 5; i++) {
-        const angle = (Math.PI * 2 * i) / 5 - Math.PI / 2;
-        const px = x + Math.cos(angle) * 8;
-        const py = y + Math.sin(angle) * 8;
-
-        if (i === 0) {
-            ctx.moveTo(px, py);
-        } else {
-            ctx.lineTo(px, py);
-        }
-    }
-
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = canvasInk();
-    ctx.lineWidth = 1;
-    ctx.stroke();
 }
 
 type TroopDraw = {
@@ -337,31 +553,85 @@ type TroopDraw = {
     color: number[];
     health: number;
     morale?: number;
+    type?: 'infantry' | 'tank';
+    maxHealth?: number;
+    isShip?: boolean;
 };
 
-function drawTroop(ctx: CanvasRenderingContext2D, troop: TroopDraw) {
+
+/** Radii that match the shared mapMarkers pixel-centre functions. */
+const TROOP_R_INFANTRY = 9;
+const TROOP_R_TANK = 12;
+const TROOP_R_SHIP = 11;
+
+function drawTroop(ctx: CanvasRenderingContext2D, troop: TroopDraw, selected = false) {
     const [x, y] = troop.position;
     const morale = troop.morale ?? 100;
-    ctx.fillStyle = rgb(troop.color);
-    ctx.beginPath();
-    ctx.arc(x, y, 5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = canvasInk();
-    ctx.lineWidth = 1;
-    ctx.stroke();
+    const isTank = troop.type === 'tank';
+    const isShip = troop.isShip === true;
+    const maxHp = troop.maxHealth ?? (isTank ? 200 : 100);
+    const ink = canvasInk();
+    const fillColor = rgb(troop.color);
+    const unitR = isTank ? TROOP_R_TANK : isShip ? TROOP_R_SHIP : TROOP_R_INFANTRY;
 
-    if (troop.health < 100) {
-        ctx.fillStyle = canvasInk();
-        ctx.fillRect(x - 8, y - 14, 16, 3);
-        ctx.fillStyle = '#27ae60';
-        ctx.fillRect(x - 8, y - 14, (16 * troop.health) / 100, 3);
+    if (isShip) {
+        ctx.fillStyle = fillColor;
+        // Hull (ellipse)
+        ctx.beginPath();
+        ctx.ellipse(x, y + 1, 10, 6, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = ink;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        // Mast
+        ctx.beginPath();
+        ctx.moveTo(x, y + 1);
+        ctx.lineTo(x, y - 10);
+        ctx.strokeStyle = ink;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        // Sail
+        ctx.beginPath();
+        ctx.moveTo(x, y - 9);
+        ctx.lineTo(x + 7, y - 4);
+        ctx.lineTo(x, y);
+        ctx.closePath();
+        ctx.globalAlpha = 0.75;
+        ctx.fillStyle = fillColor;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+    } else if (isTank) {
+        drawTankAtPixel(ctx, x, y, fillColor, TROOP_R_TANK);
+    } else {
+        drawInfantryAtPixel(ctx, x, y, fillColor, TROOP_R_INFANTRY);
     }
 
+    if (selected) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.arc(x, y, unitR + 4, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    // Health bar (shown only when damaged)
+    if (troop.health < maxHp) {
+        const barY = y - unitR - 8;
+        ctx.fillStyle = 'rgba(0,0,0,0.45)';
+        ctx.fillRect(x - 9, barY, 18, 3);
+        ctx.fillStyle = '#2ecc71';
+        ctx.fillRect(x - 9, barY, (18 * troop.health) / maxHp, 3);
+    }
+
+    // Morale bar (shown only when depleted)
     if (morale < 99) {
-        ctx.fillStyle = canvasInk();
-        ctx.fillRect(x - 8, y - 10, 16, 2);
-        ctx.fillStyle = '#8e44ad';
-        ctx.fillRect(x - 8, y - 10, (16 * morale) / 100, 2);
+        const barY = y - unitR - 4;
+        ctx.fillStyle = 'rgba(0,0,0,0.45)';
+        ctx.fillRect(x - 9, barY, 18, 2);
+        ctx.fillStyle = '#9b59b6';
+        ctx.fillRect(x - 9, barY, (18 * morale) / 100, 2);
     }
 }
 
@@ -407,7 +677,7 @@ function findEntity(world: [number, number]): { id: number; kind: 'troop' | 'cit
     }
 
     /** World radius so the pick target is at least ~22 CSS px (fixed radii vanish when zoomed out). */
-    const z = store.zoom;
+    const z = camera.zoom;
     const troopPickR = Math.max(12, 22 / z);
     const cityPickR = Math.max(14, 22 / z);
 
@@ -480,8 +750,24 @@ function onMouseDown(e: MouseEvent) {
     const entity = findEntity(world);
 
     if (entity) {
-        dragging = true;
-        store.beginPath(entity.id, entity.kind, world);
+        // If a lasso selection is active and the user starts a path from any entity,
+        // begin group drafts for all selected troops.
+        if (entity.kind === 'troop' && drafts.selectedTroopIds.length > 1) {
+            dragging = true;
+            for (const id of drafts.selectedTroopIds) {
+                drafts.beginPath(id, 'troop', world);
+            }
+        } else {
+            drafts.clearSelection();
+            dragging = true;
+            drafts.beginPath(entity.id, entity.kind, world);
+        }
+    } else {
+        // No entity hit — start lasso selection (clears existing selection first).
+        drafts.clearSelection();
+        lassoStart = [sx, sy];
+        lassoCurrent = [sx, sy];
+        lassoActive = true;
     }
 }
 
@@ -497,25 +783,58 @@ function onMouseMove(e: MouseEvent) {
     const sy = e.clientY - rect.top;
 
     if (panning) {
-        store.camX += (sx - lastMouse[0]) / store.zoom;
-        store.camY += (sy - lastMouse[1]) / store.zoom;
+        camera.camX += (sx - lastMouse[0]) / camera.zoom;
+        camera.camY += (sy - lastMouse[1]) / camera.zoom;
         lastMouse = [sx, sy];
-        draw();
+        scheduleRedraw();
+
+        return;
+    }
+
+    if (lassoActive) {
+        lassoCurrent = [sx, sy];
+        scheduleRedraw();
 
         return;
     }
 
     if (dragging) {
-        store.extendPath(screenToWorld(sx, sy));
-        draw();
+        drafts.extendPath(screenToWorld(sx, sy));
+        scheduleRedraw();
     }
 }
 
 function onMouseUp() {
+    if (lassoActive && lassoStart && lassoCurrent) {
+        lassoActive = false;
+
+        // Find own troops inside the lasso rectangle (in screen space).
+        const x1 = Math.min(lassoStart[0], lassoCurrent[0]);
+        const x2 = Math.max(lassoStart[0], lassoCurrent[0]);
+        const y1 = Math.min(lassoStart[1], lassoCurrent[1]);
+        const y2 = Math.max(lassoStart[1], lassoCurrent[1]);
+
+        const state = store.latestState;
+        if (state && (x2 - x1 > 4 || y2 - y1 > 4)) {
+            const selected = state.troops
+                .filter((t) => {
+                    if (t.ownerSlot !== store.slot) return false;
+                    const [wx, wy] = worldToScreen(t.position[0], t.position[1]);
+                    return wx >= x1 && wx <= x2 && wy >= y1 && wy <= y2;
+                })
+                .map((t) => t.id);
+            drafts.setSelection(selected);
+        }
+
+        lassoStart = null;
+        lassoCurrent = null;
+        scheduleRedraw();
+    }
+
     if (dragging) {
-        store.finishPath();
+        drafts.finishPath();
         dragging = false;
-        draw();
+        scheduleRedraw();
     }
 
     panning = false;
@@ -535,19 +854,17 @@ function onWheel(e: WheelEvent) {
     const sy = e.clientY - rect.top;
     const [wx, wy] = screenToWorld(sx, sy);
     const factor = e.deltaY > 0 ? 0.9 : 1.1;
-    const prevZoom = store.zoom;
+    const prevZoom = camera.zoom;
     const nextZoom = Math.min(GAME_VIEW_ZOOM_MAX, Math.max(GAME_VIEW_ZOOM_MIN, prevZoom * factor));
 
     if (nextZoom === prevZoom) {
-        draw();
-
         return;
     }
 
-    store.zoom = nextZoom;
-    store.camX = sx / nextZoom - wx;
-    store.camY = sy / nextZoom - wy;
-    draw();
+    camera.zoom = nextZoom;
+    camera.camX = sx / nextZoom - wx;
+    camera.camY = sy / nextZoom - wy;
+    scheduleRedraw();
 }
 
 function onKeyDown(e: KeyboardEvent) {
@@ -566,8 +883,130 @@ function onKeyDown(e: KeyboardEvent) {
     }
 
     if (e.key.toLowerCase() === 'c') {
-        store.clearDrafts();
+        drafts.clearDrafts();
         draw();
+    }
+
+    if (e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        // Halt all own troops: submit empty-path orders for every own troop.
+        store.stopAllTroops(store.gameUuid, props.snapshotFetchUrl?.trim() || undefined);
+    }
+}
+
+function onTouchStart(e: TouchEvent) {
+    e.preventDefault();
+    const canvas = canvasRef.value;
+
+    if (!canvas) {
+        return;
+    }
+
+    if (e.touches.length === 1) {
+        const [sx, sy] = getTouchCoords(canvas, e.touches[0]);
+        lastMouse = [sx, sy];
+
+        if (props.readOnly) {
+            touchPanning = true;
+            touchDrafting = false;
+            return;
+        }
+
+        const world = screenToWorld(sx, sy);
+        const entity = findEntity(world);
+
+        if (entity) {
+            touchDrafting = true;
+            touchPanning = false;
+            drafts.beginPath(entity.id, entity.kind, world);
+        } else {
+            touchPanning = true;
+            touchDrafting = false;
+        }
+    } else if (e.touches.length === 2) {
+        touchDrafting = false;
+        touchPanning = false;
+
+        if (drafts.activeDraft) {
+            drafts.finishPath();
+        }
+
+        lastTouchMid = touchMidpoint(canvas, e.touches[0], e.touches[1]);
+        lastTouchDist = touchDistance(e.touches[0], e.touches[1]);
+    }
+}
+
+function onTouchMove(e: TouchEvent) {
+    e.preventDefault();
+    const canvas = canvasRef.value;
+
+    if (!canvas) {
+        return;
+    }
+
+    if (e.touches.length === 1) {
+        const [sx, sy] = getTouchCoords(canvas, e.touches[0]);
+
+        if (touchPanning) {
+            camera.camX += (sx - lastMouse[0]) / camera.zoom;
+            camera.camY += (sy - lastMouse[1]) / camera.zoom;
+            lastMouse = [sx, sy];
+            scheduleRedraw();
+        } else if (touchDrafting) {
+            lastMouse = [sx, sy];
+            drafts.extendPath(screenToWorld(sx, sy));
+            scheduleRedraw();
+        }
+    } else if (e.touches.length === 2) {
+        const newMid = touchMidpoint(canvas, e.touches[0], e.touches[1]);
+        const newDist = touchDistance(e.touches[0], e.touches[1]);
+
+        camera.camX += (newMid[0] - lastTouchMid[0]) / camera.zoom;
+        camera.camY += (newMid[1] - lastTouchMid[1]) / camera.zoom;
+
+        if (lastTouchDist > 0 && newDist > 0) {
+            const factor = newDist / lastTouchDist;
+            const [wx, wy] = screenToWorld(newMid[0], newMid[1]);
+            const prevZoom = camera.zoom;
+            const nextZoom = Math.min(
+                GAME_VIEW_ZOOM_MAX,
+                Math.max(GAME_VIEW_ZOOM_MIN, prevZoom * factor),
+            );
+
+            if (nextZoom !== prevZoom) {
+                camera.zoom = nextZoom;
+                camera.camX = newMid[0] / nextZoom - wx;
+                camera.camY = newMid[1] / nextZoom - wy;
+            }
+        }
+
+        lastTouchMid = newMid;
+        lastTouchDist = newDist;
+        scheduleRedraw();
+    }
+}
+
+function onTouchEnd(e: TouchEvent) {
+    e.preventDefault();
+
+    if (e.touches.length === 0) {
+        if (touchDrafting) {
+            drafts.finishPath();
+            touchDrafting = false;
+            scheduleRedraw();
+        }
+
+        touchPanning = false;
+        lastTouchDist = 0;
+    } else if (e.touches.length === 1) {
+        lastTouchDist = 0;
+        touchPanning = false;
+        touchDrafting = false;
+
+        const canvas = canvasRef.value;
+        if (canvas) {
+            lastMouse = getTouchCoords(canvas, e.touches[0]);
+        }
     }
 }
 
@@ -580,18 +1019,24 @@ onMounted(() => {
     if (canvas) {
         resizeObserver = new ResizeObserver(() => {
             tryInitialCameraFit();
+            scheduleRedraw();
         });
         resizeObserver.observe(canvas);
     }
 
     tryInitialCameraFit();
-    draw();
-});
+    needsRedraw = true;
+    rafId = requestAnimationFrame(rafLoop);});
 
 onUnmounted(() => {
     window.removeEventListener('keydown', onKeyDown);
     resizeObserver?.disconnect();
     resizeObserver = null;
+
+    if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+    }
 });
 
 watch(
@@ -610,28 +1055,49 @@ watch(
 );
 
 watch(
-    () => [store.terrain, store.forest, store.terrainCells, store.latestState, store.draftPaths, store.activeDraft],
+    () => [store.terrain, store.forest, store.terrainCells],
     () => {
         bakeTerrain();
-        draw();
+        scheduleRedraw();
+    },
+    { deep: true },
+);
+
+watch(
+    () => [store.latestState, drafts.draftPaths, drafts.activeDraft],
+    ([newState]) => {
+        const troops = (newState as typeof store.latestState)?.troops ?? [];
+        for (const t of troops) {
+            troopTargetPositions.set(t.id, t.position);
+            // Snap display to target on first appearance
+            if (!troopDisplayPositions.has(t.id)) {
+                troopDisplayPositions.set(t.id, [t.position[0], t.position[1]]);
+            }
+        }
+        scheduleRedraw();
     },
     { deep: true },
 );
 
 watch(isDark, () => {
-    draw();
+    bakeTerrain();
+    scheduleRedraw();
 });
 </script>
 
 <template>
     <canvas
         ref="canvasRef"
-        class="h-full w-full cursor-crosshair touch-none"
+        class="h-full w-full cursor-crosshair"
         @contextmenu.prevent
         @mousedown="onMouseDown"
         @mousemove="onMouseMove"
         @mouseup="onMouseUp"
         @mouseleave="onMouseUp"
-        @wheel="onWheel"
+        @wheel.prevent="onWheel"
+        @touchstart.prevent="onTouchStart"
+        @touchmove.prevent="onTouchMove"
+        @touchend.prevent="onTouchEnd"
+        @touchcancel.prevent="onTouchEnd"
     />
 </template>

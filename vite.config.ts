@@ -7,6 +7,7 @@ import { bunny } from 'laravel-vite-plugin/fonts';
 import { defineConfig } from 'vite';
 
 const usePolling = process.env.VITE_USE_POLLING === 'true';
+const isInSail = process.env.LARAVEL_SAIL === '1';
 
 export default defineConfig({
     server: {
@@ -14,9 +15,10 @@ export default defineConfig({
          * Avoid `host: true` writing `http://[::]:5173` into `public/hot`: the page is often opened
          * as `http://localhost`, and loading modules from `http://[::]:5174` then fails (CORS / null
          * status). Use loopback so script and HMR URLs match the browser origin people actually use.
+         * When running inside Sail (Docker), bind to 0.0.0.0 so the published port is reachable.
          * For phone/LAN testing, temporarily set `host: true` or override `VITE_DEV_SERVER_URL` in `.env`.
          */
-        host: '127.0.0.1',
+        host: isInSail ? '0.0.0.0' : '127.0.0.1',
         strictPort: false,
         watch: {
             ignored: ['**/storage/**', '**/bootstrap/cache/**', '**/vendor/**'],

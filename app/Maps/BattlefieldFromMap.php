@@ -17,8 +17,9 @@ final class BattlefieldFromMap
 {
     /**
      * @param  array<string, mixed>  $mapDataV2
+     * @param  array<int, int>  $teamIndicesBySlot  Optional slot→teamIndex mapping from GamePlayer records.
      */
-    public static function populateEnvironment(Environment $environment, array $mapDataV2): void
+    public static function populateEnvironment(Environment $environment, array $mapDataV2, array $teamIndicesBySlot = []): void
     {
         $cellRows = (int) ($mapDataV2['cellRows'] ?? 0);
         $cellCols = (int) ($mapDataV2['cellCols'] ?? 0);
@@ -148,7 +149,8 @@ final class BattlefieldFromMap
         $nextTroopId = 1;
         for ($slot = 0; $slot < $teamCount; $slot++) {
             $city = $capitalCityByTeam[$slot];
-            $player = new Player($city->position, GameConstants::COLORS[$slot], $slot, $environment, $nextTroopId++);
+            $teamIndex = $teamIndicesBySlot[$slot] ?? 0;
+            $player = new Player($city->position, GameConstants::COLORS[$slot], $slot, $environment, $nextTroopId++, $teamIndex);
             $city->owner = $player;
             $players[$slot] = $player;
         }
@@ -159,7 +161,7 @@ final class BattlefieldFromMap
                 continue;
             }
             $pos = self::cellVertexToWorld($site['row'], $site['col']);
-            $players[$team]->spawnTroop($pos, [], $nextTroopId++);
+            $players[$team]->spawnTroop($pos, [], $nextTroopId++, -1, $site['type']);
         }
 
         /** @var list<Player> $playersList */
@@ -194,8 +196,11 @@ final class BattlefieldFromMap
     {
         return match ($terrainId) {
             'water', 'river', 'deep_water' => GameConstants::TERRAIN_VALUES['water'] - 0.02,
-            'swamp' => 0.04,
-            'plains', 'meadow', 'desert', 'beach', 'forest', 'dense_forest' => GameConstants::TERRAIN_VALUES['plains'] + 0.02,
+            'swamp' => 0.04,   // Between swamp threshold (0.025) and beach (0.05) → 'swamp'
+            'beach' => 0.065,  // Between beach threshold (0.05) and plains (0.1) → 'beach'
+            'snow' => 0.32,     // Between snow threshold (0.30) and desert (0.55) → 'snow'
+            'desert' => 0.57,   // Between desert threshold (0.55) and hill (0.7) → 'desert'
+            'plains', 'meadow', 'forest', 'dense_forest' => GameConstants::TERRAIN_VALUES['plains'] + 0.02,
             'hill' => GameConstants::TERRAIN_VALUES['hill'],
             'mountain' => GameConstants::TERRAIN_VALUES['mountain'] + 0.02,
             default => GameConstants::TERRAIN_VALUES['plains'],

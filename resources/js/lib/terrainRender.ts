@@ -102,6 +102,7 @@ export function editorTerrainDimOverlayFill(isDark: boolean): string {
         : `rgba(0, 0, 0, ${EDITOR_TERRAIN_DIM_ALPHA_LIGHT})`;
 }
 
+
 /**
  * Softens biome boundaries in the map editor by mixing the cell color with neighbor terrain colors.
  */

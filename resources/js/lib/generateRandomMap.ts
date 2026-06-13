@@ -21,7 +21,15 @@ export type GeneratedMapData = {
     teamPaletteSlots?: number[];
 };
 
-export type MapGenerationType = 'mix' | 'islands' | 'desert' | 'mountains';
+export type MapGenerationType =
+    | 'mix'
+    | 'islands'
+    | 'desert'
+    | 'mountains'
+    | 'jungle'
+    | 'volcanic'
+    | 'tundra'
+    | 'grassland';
 
 export const MAP_GENERATION_TYPE_OPTIONS: ReadonlyArray<{
     id: MapGenerationType;
@@ -49,6 +57,26 @@ export const MAP_GENERATION_TYPE_OPTIONS: ReadonlyArray<{
         label: 'Mountains',
         description: 'Rugged highlands with valleys linked by mountain passes.',
     },
+    {
+        id: 'jungle',
+        label: 'Jungle',
+        description: 'Impenetrable rainforest canopy threaded by winding rivers and swampland.',
+    },
+    {
+        id: 'volcanic',
+        label: 'Volcanic',
+        description: 'Smouldering mountain peaks surrounded by vast ash fields and hardened lava rock.',
+    },
+    {
+        id: 'tundra',
+        label: 'Tundra',
+        description: 'Frozen wastes of open plains and sparse taiga beneath jagged ice-capped peaks.',
+    },
+    {
+        id: 'grassland',
+        label: 'Grassland',
+        description: 'Sweeping open meadows and plains with scattered forests, gentle rivers, and almost no mountains.',
+    },
 ];
 
 export type MapGenerationOptions = {
@@ -69,6 +97,10 @@ type GenerationProfile = {
     carveRivers: boolean;
     aridBiome: boolean;
     mountainBiome: boolean;
+    jungleBiome?: boolean;
+    volcanicBiome?: boolean;
+    tundraBiome?: boolean;
+    grasslandBiome?: boolean;
 };
 
 const GENERATION_PROFILES: Record<MapGenerationType, GenerationProfile> = {
@@ -111,6 +143,50 @@ const GENERATION_PROFILES: Record<MapGenerationType, GenerationProfile> = {
         carveRivers: true,
         aridBiome: false,
         mountainBiome: true,
+    },
+    jungle: {
+        elevationBias: 0.02,
+        moistureBias: 0.32,
+        edgeFalloffStrength: 0.12,
+        noiseScale: 0.046,
+        islandMask: false,
+        carveRivers: true,
+        aridBiome: false,
+        mountainBiome: false,
+        jungleBiome: true,
+    },
+    volcanic: {
+        elevationBias: 0.22,
+        moistureBias: -0.25,
+        edgeFalloffStrength: 0.06,
+        noiseScale: 0.04,
+        islandMask: false,
+        carveRivers: false,
+        aridBiome: false,
+        mountainBiome: true,
+        volcanicBiome: true,
+    },
+    tundra: {
+        elevationBias: 0.08,
+        moistureBias: -0.22,
+        edgeFalloffStrength: 0.14,
+        noiseScale: 0.05,
+        islandMask: false,
+        carveRivers: false,
+        aridBiome: false,
+        mountainBiome: false,
+        tundraBiome: true,
+    },
+    grassland: {
+        elevationBias: -0.04,
+        moistureBias: 0.08,
+        edgeFalloffStrength: 0.12,
+        noiseScale: 0.048,
+        islandMask: false,
+        carveRivers: true,
+        aridBiome: false,
+        mountainBiome: false,
+        grasslandBiome: true,
     },
 };
 
@@ -599,6 +675,142 @@ function classifyDesert(elevation: number, moisture: number, oasis: number): Ter
     }
 
     return 'desert';
+}
+
+/**
+ * Dense rainforest biome: swamp and beach at low elevations, thick forest canopy through
+ * the mid-range, hills and mountain peaks at the top.
+ */
+function classifyJungle(elevation: number, moisture: number): TerrainId {
+    if (elevation < 0.13) {
+        return 'deep_water';
+    }
+
+    if (elevation < 0.22) {
+        return 'water';
+    }
+
+    if (elevation < 0.29) {
+        return moisture > 0.45 ? 'swamp' : 'beach';
+    }
+
+    if (elevation < 0.38) {
+        return moisture > 0.52 ? 'swamp' : 'meadow';
+    }
+
+    if (elevation < 0.64) {
+        return moisture > 0.68 ? 'dense_forest' : 'forest';
+    }
+
+    if (elevation < 0.78) {
+        return moisture > 0.55 ? 'dense_forest' : 'forest';
+    }
+
+    if (elevation < 0.86) {
+        return 'hill';
+    }
+
+    return 'mountain';
+}
+
+/**
+ * Volcanic wasteland: shallow water and beaches at edges, broad ash-field deserts in the
+ * lowlands, rocky hills rising to dramatic mountain peaks.
+ */
+function classifyVolcanic(elevation: number, moisture: number): TerrainId {
+    if (elevation < 0.12) {
+        return 'deep_water';
+    }
+
+    if (elevation < 0.18) {
+        return 'water';
+    }
+
+    if (elevation < 0.26) {
+        return 'beach';
+    }
+
+    if (elevation < 0.44) {
+        return moisture > 0.5 ? 'plains' : 'desert';
+    }
+
+    if (elevation < 0.58) {
+        return moisture > 0.48 ? 'hill' : 'desert';
+    }
+
+    if (elevation < 0.74) {
+        return 'hill';
+    }
+
+    return 'mountain';
+}
+
+/**
+ * Frozen tundra: snow fields dominate the lowlands, sparse taiga forest at
+ * mid-elevation, bare hills and ice-capped mountain peaks above.
+ */
+function classifyTundra(elevation: number, moisture: number): TerrainId {
+    if (elevation < 0.14) {
+        return 'deep_water';
+    }
+
+    if (elevation < 0.24) {
+        return 'water';
+    }
+
+    if (elevation < 0.32) {
+        return 'beach';
+    }
+
+    if (elevation < 0.5) {
+        return moisture > 0.6 ? 'meadow' : 'snow';
+    }
+
+    if (elevation < 0.62) {
+        return moisture > 0.65 ? 'forest' : 'snow';
+    }
+
+    if (elevation < 0.74) {
+        return 'hill';
+    }
+
+    return 'mountain';
+}
+
+/**
+ * Open grassland: sweeping meadows and plains with light forest patches, gentle rivers,
+ * and only rare hills — mountains are almost entirely absent.
+ */
+function classifyGrassland(elevation: number, moisture: number): TerrainId {
+    if (elevation < 0.13) {
+        return 'deep_water';
+    }
+
+    if (elevation < 0.22) {
+        return 'water';
+    }
+
+    if (elevation < 0.28) {
+        return moisture > 0.52 ? 'swamp' : 'beach';
+    }
+
+    if (elevation < 0.42) {
+        return moisture > 0.6 ? 'swamp' : 'meadow';
+    }
+
+    if (elevation < 0.62) {
+        return moisture > 0.7 ? 'forest' : moisture > 0.35 ? 'meadow' : 'plains';
+    }
+
+    if (elevation < 0.74) {
+        return moisture > 0.62 ? 'forest' : 'plains';
+    }
+
+    if (elevation < 0.86) {
+        return 'hill';
+    }
+
+    return 'mountain';
 }
 
 /** Paint plains and meadow in desert rings around existing oasis cores. */
@@ -1295,6 +1507,7 @@ function smoothGrid(grid: TerrainId[][], rows: number, cols: number, passes: num
         'forest',
         'desert',
         'swamp',
+        'snow',
         'meadow',
         'plains',
         'beach',
@@ -1474,6 +1687,14 @@ export function generateRandomMap(options: MapGenerationOptions = {}): Generated
             if (profile.aridBiome) {
                 const oasis = oasisStrength(x, y, scale, oasisOx, oasisOy);
                 cells[x][y] = classifyDesert(elevation, moisture, oasis);
+            } else if (profile.jungleBiome) {
+                cells[x][y] = classifyJungle(elevation, moisture);
+            } else if (profile.volcanicBiome) {
+                cells[x][y] = classifyVolcanic(elevation, moisture);
+            } else if (profile.tundraBiome) {
+                cells[x][y] = classifyTundra(elevation, moisture);
+            } else if (profile.grasslandBiome) {
+                cells[x][y] = classifyGrassland(elevation, moisture);
             } else {
                 cells[x][y] = classify(elevation, moisture);
             }

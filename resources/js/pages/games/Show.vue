@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { Head, Link, router, usePage } from '@inertiajs/vue3';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import MapExplorePreview from '@/components/map-explore/MapExplorePreview.vue';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { join, play, start } from '@/routes/games';
+import type { MapDataPayload } from '@/lib/mapEditorGrid';
+import { join, leave, play, replay as replayRoute, start } from '@/routes/games';
 import { index as lobbies } from '@/routes/lobbies';
 
 type Lobby = {
@@ -18,8 +20,9 @@ type Lobby = {
     isParticipant: boolean;
     canStart: boolean;
     hostName: string;
-    players: Array<{ slot: number; name: string; color: string }>;
+    players: Array<{ slot: number; name: string; color: string; teamIndex: number }>;
     sourceMap: { uuid: string; name: string; by: string } | null;
+    mapPreviewData: MapDataPayload | null;
     abortedReason?: string | null;
 };
 
@@ -77,6 +80,24 @@ function joinGame() {
 function startGame() {
     router.post(start(props.game.uuid).url);
 }
+
+function leaveGame() {
+    router.delete(leave(props.game.uuid).url);
+}
+
+const codeCopied = ref(false);
+
+async function copyCode(): Promise<void> {
+    try {
+        await navigator.clipboard.writeText(props.game.code);
+        codeCopied.value = true;
+        setTimeout(() => {
+            codeCopied.value = false;
+        }, 2000);
+    } catch {
+        // Clipboard API unavailable (non-secure context)
+    }
+}
 </script>
 
 <template>
@@ -96,9 +117,19 @@ function startGame() {
             <p class="text-xs font-semibold text-muted-foreground uppercase">
                 Lobby code
             </p>
-            <p class="font-display mt-2 text-3xl font-bold tracking-widest sm:text-4xl">
-                {{ game.code }}
-            </p>
+            <div class="mt-2 flex items-center justify-center gap-3">
+                <p class="font-display text-3xl font-bold tracking-widest sm:text-4xl">
+                    {{ game.code }}
+                </p>
+                <Button
+                    size="sm"
+                    variant="outline"
+                    class="text-xs"
+                    @click="copyCode"
+                >
+                    {{ codeCopied ? 'Copied!' : 'Copy' }}
+                </Button>
+            </div>
             <p class="mt-3 text-sm text-muted-foreground">
                 {{ game.playerCount }} / {{ game.maxPlayers }} commanders ready
             </p>
@@ -119,7 +150,14 @@ function startGame() {
             </p>
             <p class="mt-1 font-medium">
                 {{ game.sourceMap.name }}
+                <span class="text-muted-foreground font-normal">by {{ game.sourceMap.by }}</span>
             </p>
+            <div
+                v-if="game.mapPreviewData"
+                class="mt-3 flex justify-center overflow-hidden rounded-md border border-border"
+            >
+                <MapExplorePreview :data="game.mapPreviewData" />
+            </div>
         </div>
 
         <div class="wod-panel space-y-2 p-4">
@@ -140,6 +178,13 @@ function startGame() {
                             }"
                         />
                         {{ commanderByDisplaySlot[slotNum]!.name }}
+                        <Badge
+                            v-if="commanderByDisplaySlot[slotNum]!.teamIndex > 0"
+                            variant="outline"
+                            class="text-[0.6rem]"
+                        >
+                            Team {{ commanderByDisplaySlot[slotNum]!.teamIndex }}
+                        </Badge>
                     </span>
                 </template>
                 <Badge v-else variant="outline">Empty</Badge>
@@ -150,6 +195,14 @@ function startGame() {
             <Link :href="lobbies().url" class="w-full sm:w-auto">
                 <Button variant="outline" class="w-full sm:w-auto">Back</Button>
             </Link>
+            <Button
+                v-if="game.isParticipant && game.status === 'lobby'"
+                variant="destructive"
+                class="w-full sm:w-auto"
+                @click="leaveGame"
+            >
+                Leave lobby
+            </Button>
             <div
                 v-if="!game.isParticipant && !page.props.auth.user"
                 class="flex w-full flex-col gap-2 sm:w-auto"
@@ -181,6 +234,18 @@ function startGame() {
                 class="w-full sm:w-auto"
             >
                 <Button class="w-full sm:w-auto">Enter battlefield</Button>
+            </Link>
+            <Link
+                v-if="game.status === 'finished'"
+                :href="replayRoute(game.uuid).url"
+                class="w-full sm:w-auto"
+            >
+                <Button
+                    variant="outline"
+                    class="w-full sm:w-auto"
+                >
+                    Watch Replay
+                </Button>
             </Link>
         </div>
     </div>

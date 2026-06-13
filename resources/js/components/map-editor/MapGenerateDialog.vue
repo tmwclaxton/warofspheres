@@ -118,7 +118,7 @@ function onGenerate(): void {
             </div>
 
             <div class="space-y-1">
-                <label class="text-xs font-semibold" for="map-generate-teams">Teams</label>
+                <label class="text-xs font-semibold" for="map-generate-teams">Teams:</label>
                 <select
                     id="map-generate-teams"
                     v-model.number="generateTeamCount"
@@ -126,7 +126,7 @@ function onGenerate(): void {
                 >
                     <option v-for="t in teamCountChoices" :key="t" :value="t">{{ t }}</option>
                 </select>
-                <p class="text-xs text-muted-foreground">
+                <p class="mr-1 text-xs text-muted-foreground">
                     Number of players / team slots on the generated map.
                 </p>
             </div>

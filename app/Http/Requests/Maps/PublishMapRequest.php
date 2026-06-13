@@ -42,6 +42,6 @@ class PublishMapRequest extends FormRequest
 
     public function withValidator(Validator $validator): void
     {
-        ValidatesMapSavePayload::afterValidator($validator);
+        ValidatesMapSavePayload::afterValidator($validator, fullMarkerValidation: true);
     }
 }

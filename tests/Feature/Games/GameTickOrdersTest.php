@@ -93,6 +93,52 @@ class GameTickOrdersTest extends TestCase
         }
     }
 
+    public function test_new_orders_override_pending_orders_for_same_troop(): void
+    {
+        $host = User::factory()->create();
+        $guest = User::factory()->create();
+        $owner = User::factory()->create();
+        $map = Map::factory()->for($owner)->playablePublishedTwoTeam()->create();
+
+        $this->actingAs($host)
+            ->post(route('games.store'), ['map_uuid' => $map->uuid]);
+        $game = Game::query()->firstOrFail();
+
+        $this->actingAs($guest)->post(route('games.join', $game));
+        $this->actingAs($host)->post(route('games.start', $game));
+        $game->refresh();
+
+        $manager = app(GameManager::class);
+
+        try {
+            $state = $manager->getLiveState($game);
+            $hostPlayer = $game->players()->where('user_id', $host->id)->firstOrFail();
+            $troopId = $state['environment']['players'][0]['troops'][0]['id'];
+            $pos = $state['environment']['players'][0]['troops'][0]['position'];
+
+            $pathA = [[(float) $pos[0] + 100.0, (float) $pos[1]]];
+            $pathB = [[(float) $pos[0], (float) $pos[1] + 200.0]];
+
+            // Submit first set of orders (pathA) for the troop.
+            $manager->submitOrders($game, $hostPlayer, [[[$troopId, $pathA]], []]);
+
+            // Submit a second set of orders (pathB) for the same troop — should replace pathA.
+            $manager->submitOrders($game, $hostPlayer, [[[$troopId, $pathB]], []]);
+
+            $stateAfter = $manager->getLiveState($game);
+            $pending = $stateAfter['playerInputs'][$hostPlayer->slot];
+
+            // Only one entry should remain for the troop — the latest one.
+            $this->assertCount(1, $pending, 'Duplicate pending entries for the same troop must be collapsed to one.');
+
+            // The stored path should be pathB (the override), not pathA.
+            $this->assertSame($pathB, $pending[0][1], 'New orders must replace the previously queued orders for the same troop.');
+        } finally {
+            Redis::del('game:live:'.$game->uuid);
+            Redis::srem('games:active', $game->uuid);
+        }
+    }
+
     public function test_tick_advances_even_when_legacy_pause_flags_present_in_state(): void
     {
         $host = User::factory()->create();

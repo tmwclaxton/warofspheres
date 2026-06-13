@@ -77,11 +77,12 @@ final class Environment
      * Build a battlefield from a published Map Builder v2 payload (full editor grid; no cropping).
      *
      * @param  array<string, mixed>  $mapDataV2
+     * @param  array<int, int>  $teamIndicesBySlot
      */
-    public static function fromMapEditorData(int $seed, int $playerCount, array $mapDataV2): self
+    public static function fromMapEditorData(int $seed, int $playerCount, array $mapDataV2, array $teamIndicesBySlot = []): self
     {
         $environment = new self($seed, $playerCount, true);
-        BattlefieldFromMap::populateEnvironment($environment, $mapDataV2);
+        BattlefieldFromMap::populateEnvironment($environment, $mapDataV2, $teamIndicesBySlot);
 
         return $environment;
     }
@@ -323,7 +324,7 @@ final class Environment
         }
 
         $tries = 0;
-        $distance = 15;
+        $distance = GameConstants::CITY_GEN_MIN_SEPARATION;
 
         while (count($this->cities) < 10) {
             $cx = $this->randomInt(0, $this->gridMaxX);
@@ -348,7 +349,7 @@ final class Environment
                 && $this->forestMarching->grid[$cx][$cy] < GameConstants::THRESHOLD
             ) {
                 $this->cities[] = new City([$cx * GameConstants::CELL_SIZE, $cy * GameConstants::CELL_SIZE], $this->nextCityId++);
-                $distance = 15;
+                $distance = GameConstants::CITY_GEN_MIN_SEPARATION;
             }
 
             $tries++;
@@ -490,7 +491,10 @@ final class Environment
             return $min;
         }
 
-        $this->rngSeed = (int) (($this->rngSeed * 1103515245 + 12345) & 0x7FFFFFFF);
+        // Mask to 31 bits BEFORE multiplying so the product stays within int64 range.
+        // Without the pre-mask, a seed larger than ~2^31 (e.g. a Unix-ms timestamp) would
+        // overflow to a float and the subsequent bitwise-AND cast would be fatal in PHP 8.1+.
+        $this->rngSeed = (($this->rngSeed & 0x7FFFFFFF) * 1103515245 + 12345) & 0x7FFFFFFF;
 
         return $min + ($this->rngSeed % $span);
     }
@@ -556,7 +560,7 @@ final class Environment
         return max(0, $worldTick - $troop->spawnedAtWorldTick);
     }
 
-    private function troopWarmupMultiplier(Troop $troop, int $worldTick): float
+    public function troopWarmupMultiplier(Troop $troop, int $worldTick): float
     {
         $age = $this->troopEffectiveAge($troop, $worldTick);
         if ($age >= GameConstants::TROOP_WARMUP_TICKS) {
@@ -713,6 +717,29 @@ final class Environment
 
         $this->assignTroopPathsFromOrders($pathsToApply);
 
+        // Merge vision grids between teammates (non-zero teamIndex = team play).
+        $this->mergeTeamVision();
+
+        // Supply starvation: troops beyond owned_cities × CITY_SUPPLY_CAP lose HP each tick.
+        foreach ($this->players as $player) {
+            $ownedCities = count(array_filter($this->cities, fn (City $c) => $c->owner === $player));
+            $supplyLimit = $ownedCities * GameConstants::CITY_SUPPLY_CAP;
+            $excessCount = count($player->troops) - $supplyLimit;
+            if ($excessCount > 0) {
+                // Drain the most recently spawned (highest id) troops first.
+                $sorted = $player->troops;
+                usort($sorted, fn (Troop $a, Troop $b) => $b->id - $a->id);
+                $drained = 0;
+                foreach ($sorted as $troop) {
+                    if ($drained >= $excessCount) {
+                        break;
+                    }
+                    $troop->health -= GameConstants::STARVATION_DAMAGE_PER_TICK;
+                    $drained++;
+                }
+            }
+        }
+
         foreach ($this->players as $player) {
             $player->vision->setGrid($this->defaultVision);
 
@@ -792,8 +819,8 @@ final class Environment
                     }
 
                     $troop->health += (int) ($healingPower / 25);
-                    if ($troop->health > 100) {
-                        $troop->health = 100;
+                    if ($troop->health > $troop->maxHealth()) {
+                        $troop->health = $troop->maxHealth();
                     }
                 }
 
@@ -807,7 +834,14 @@ final class Environment
 
                 if ($troop->path !== []) {
                     $target = $troop->path[0];
-                    $terrainSpeed = GameConstants::TERRAIN_SPEEDS[$onTerrain];
+                    $isWater = in_array($onTerrain, ['water', 'deep_water', 'river']);
+                    if ($troop->isShip && $isWater) {
+                        $terrainSpeed = GameConstants::TERRAIN_SPEEDS[$onTerrain] * GameConstants::SHIP_WATER_SPEED_MULT;
+                    } elseif ($troop->type === 'tank') {
+                        $terrainSpeed = GameConstants::TANK_TERRAIN_SPEEDS[$onTerrain] ?? GameConstants::TERRAIN_SPEEDS[$onTerrain] * 0.6;
+                    } else {
+                        $terrainSpeed = GameConstants::TERRAIN_SPEEDS[$onTerrain];
+                    }
                     [$dir] = GameMath::xyToDirDis([$target[0] - $oldPos[0], $target[1] - $oldPos[1]]);
                     $distance = $terrainSpeed * GameConstants::TROOP_MOVEMENT_PER_TICK_SCALE;
                     [$newOffX, $newOffY] = GameMath::dirDisToXy($dir, $distance);
@@ -821,8 +855,8 @@ final class Environment
                         $oldOffX = $newPos[0] - $otherX;
                         $oldOffY = $newPos[1] - $otherY;
                         [$dir, $sepDist] = GameMath::xyToDirDis([$oldOffX, $oldOffY]);
-                        if ($sepDist < 14) {
-                            $sepDist = 14;
+                        if ($sepDist < GameConstants::TROOP_MIN_SEPARATION) {
+                            $sepDist = GameConstants::TROOP_MIN_SEPARATION;
                             [$newOffX, $newOffY] = GameMath::dirDisToXy($dir, $sepDist);
                             $changeX = $newOffX - $oldOffX;
                             $changeY = $newOffY - $oldOffY;
@@ -861,7 +895,8 @@ final class Environment
                 }
 
                 if ($enemiesInRange !== []) {
-                    $base = (int) (GameConstants::TERRAIN_ATTACKS[$onTerrain] / 25);
+                    $attackTable = $troop->type === 'tank' ? GameConstants::TANK_TERRAIN_ATTACKS : GameConstants::TERRAIN_ATTACKS;
+                    $base = (int) (($attackTable[$onTerrain] ?? GameConstants::TERRAIN_ATTACKS[$onTerrain]) / 25);
                     $base = max(1, $base);
                     $warmup = $this->troopWarmupMultiplier($troop, $worldTick);
                     $moraleFac = max(0.25, $troop->morale / 100.0);
@@ -890,6 +925,24 @@ final class Environment
 
                 $troop->morale = max(GameConstants::TROOP_MORALE_MIN, min(GameConstants::TROOP_MORALE_MAX, $troop->morale));
 
+                // Ship / water conversion logic.
+                $isWaterTerrain = in_array($onTerrain, ['water', 'deep_water', 'river']);
+                if ($isWaterTerrain) {
+                    $troop->waterTicks++;
+                    if ($troop->waterTicks >= GameConstants::SHIP_CONVERSION_TICKS && ! $troop->isShip) {
+                        $troop->isShip = true;
+                    }
+                    // Non-ships take HP damage each tick on water.
+                    if (! $troop->isShip) {
+                        $troop->health -= GameConstants::WATER_DAMAGE_PER_TICK;
+                    }
+                } else {
+                    if ($troop->waterTicks > 0) {
+                        $troop->waterTicks = 0;
+                        $troop->isShip = false;
+                    }
+                }
+
                 if ($onTerrain === 'hill') {
                     $this->cityVisionBrush->apply($player->vision, $troop->position, 0);
                 } else {
@@ -901,8 +954,14 @@ final class Environment
                     [$cx, $cy] = $city->position;
                     [$tx, $ty] = $troop->position;
                     [, $dist] = GameMath::xyToDirDis([$tx - $cx, $ty - $cy]);
-                    if ($dist < 15) {
-                        $this->playersInCities[$i][] = $player;
+
+                    if ($dist < GameConstants::CELL_SIZE) {
+                        // Only count each player once per city regardless of how
+                        // many troops they have nearby — prevents the player being
+                        // listed multiple times which would break the count === 1 check.
+                        if (! in_array($player, $this->playersInCities[$i], true)) {
+                            $this->playersInCities[$i][] = $player;
+                        }
                         break;
                     }
                 }
@@ -936,10 +995,10 @@ final class Environment
                 [$otherX, $otherY] = $otherT->position;
                 [$offX, $offY] = [$newPos[0] - $otherX, $newPos[1] - $otherY];
                 [, $distance] = GameMath::xyToDirDis([$offX, $offY]);
-                if ($distance < 28) {
+                if ($distance < GameConstants::TROOP_HIT_RANGE) {
                     $hitEnemy = true;
                 }
-                if ($distance < 32) {
+                if ($distance < GameConstants::TROOP_COMBAT_RANGE) {
                     $enemiesInRange[] = [$otherT, $distance];
                 }
             }
@@ -992,17 +1051,61 @@ final class Environment
                 $ownedCount = count(array_filter($this->cities, fn (City $c) => $c->owner === $city->owner));
                 $tPerC = count($city->owner->troops) / max(1, $ownedCount);
 
-                if ($city->timer >= 45 * (30 * $tPerC) && $tPerC < 10) {
+                $baseThreshold = 45 * (30 * $tPerC);
+                $adjustedThreshold = (int) round($baseThreshold * $city->productionSpeedMultiplier);
+
+                if ($city->timer >= $adjustedThreshold && $tPerC < 10 && $city->productionType !== 'none') {
+                    $unitType = 'infantry';
+                    if ($city->productionTankRatio > 0) {
+                        $roll = $this->randomInt(0, 100);
+                        if ($roll <= $city->productionTankRatio) {
+                            $unitType = 'tank';
+                        }
+                    }
+
                     $city->owner->spawnTroop(
                         [$cx + $this->randomInt(-6, 5), $cy + $this->randomInt(-6, 5)],
                         $city->path,
                         $this->nextTroopId++,
                         $worldTick,
+                        $unitType,
                     );
                     $city->timer = 0;
                 }
             }
         }
+    }
+
+    /**
+     * Rebuild every player's vision grid from the current troop positions and owned cities.
+     *
+     * Vision is not persisted to Redis (it is stripped in Player::toArray()) because it is always
+     * reset and recomputed at the start of each tick's updateTroops() call.  This method provides
+     * the same result without running a full tick, so that drawInfo() — used by snapshot and
+     * broadcast endpoints that run between ticks — produces correct fog-of-war data.
+     */
+    public function recomputeVision(): void
+    {
+        foreach ($this->players as $player) {
+            $player->vision->setGrid($this->defaultVision);
+
+            foreach ($this->cities as $city) {
+                if ($city->owner === $player) {
+                    $this->cityVisionBrush->apply($player->vision, $city->position, 0);
+                }
+            }
+
+            foreach ($player->troops as $troop) {
+                $terrain = $this->terrainNameAtWorldPosition($troop->position);
+                if ($terrain === 'hill') {
+                    $this->cityVisionBrush->apply($player->vision, $troop->position, 0);
+                } else {
+                    $this->visionBrush->apply($player->vision, $troop->position, 0);
+                }
+            }
+        }
+
+        $this->mergeTeamVision();
     }
 
     /**
@@ -1026,8 +1129,10 @@ final class Environment
                 $lit = $player->vision->getGridValue($gx, $gy) >= GameConstants::THRESHOLD;
                 /** Always return your own army — vision sampling can sit below {@see GameConstants::THRESHOLD} where brushes pull toward 0. */
                 $isOwnTroop = $troop->owner->slot === $playerSlot;
+                /** Allied troops (same non-zero team) are always visible. */
+                $isAlly = $player->teamIndex > 0 && $troop->owner->teamIndex === $player->teamIndex;
 
-                if ($isOwnTroop || $lit) {
+                if ($isOwnTroop || $isAlly || $lit) {
                     $warmup = $this->troopWarmupMultiplier($troop, $worldTick);
                     $moraleFac = max(0.25, $troop->morale / 100.0);
                     $troops[] = [
@@ -1038,6 +1143,9 @@ final class Environment
                         'path' => $troop->path,
                         'health' => $troop->health,
                         'morale' => $troop->morale,
+                        'type' => $troop->type,
+                        'maxHealth' => $troop->maxHealth(),
+                        'isShip' => $troop->isShip,
                         'warmupMultiplier' => round($warmup, 3),
                         'combatMultiplier' => round($warmup * $moraleFac, 3),
                     ];
@@ -1053,44 +1161,225 @@ final class Environment
                 'path' => $city->path,
                 'ownerSlot' => $city->owner?->slot,
                 'markerType' => $city->markerType,
+                'productionType' => $city->productionType,
+                'productionTankRatio' => $city->productionTankRatio,
+                'productionSpeedMultiplier' => $city->productionSpeedMultiplier,
             ];
         }, $this->cities);
 
+        // Compute compact territory ownership grid: each cell holds the slot of the
+        // player with the strongest border influence (−1 = neutral / contested).
+        $gridW = $this->gridMaxX + 1;
+        $gridH = $this->gridMaxY + 1;
+        // Territory is computed with two combined signals:
+        //
+        // 1. Border-brush influence (0–1): reflects actual zone-of-control near
+        //    each player's troops, capitals, and outposts.  The brush radius is
+        //    small (40–80 px), so this only affects cells within a few tiles of
+        //    a unit — it shifts the frontier line closer to the enemy.
+        //
+        // 2. Voronoi proximity to the player's nearest anchor (owned city or
+        //    start position).  This divides the whole map even in areas where no
+        //    unit has yet reached, giving every cell an owner from tick one.
+        //
+        // Score for player p at cell (gx,gy):
+        //   score = influence(p) × 3  +  scaleSq / (scaleSq + minDistSq(p))
+        //
+        // Combining the two signals means gameplay control dominates near
+        // units while distance-based Voronoi fills the rest of the map.
+
+        // Pre-compute anchor positions per player (owned cities + start pos).
+        // We use squared distances to avoid sqrt in the hot loop.
+        $cs = GameConstants::CELL_SIZE;
+        $mapW = ($this->gridMaxX + 1) * $cs;
+        $mapH = ($this->gridMaxY + 1) * $cs;
+        $voronoiScale = (float) max($mapW, $mapH);
+        $scaleSq = $voronoiScale * $voronoiScale;
+
+        /** @var array<int, list<array{0: float, 1: float}>> $anchorsBySlot */
+        $anchorsBySlot = [];
+        foreach ($this->players as $p) {
+            $anchors = [[$p->startPos[0], $p->startPos[1]]];
+            foreach ($this->cities as $city) {
+                if ($city->owner === $p) {
+                    $anchors[] = [$city->position[0], $city->position[1]];
+                }
+            }
+            $anchorsBySlot[$p->slot] = $anchors;
+        }
+
+        $territory = [];
+
+        for ($gx = 0; $gx < $gridW; $gx++) {
+            $col = [];
+            $cx = ($gx + 0.5) * $cs;
+
+            for ($gy = 0; $gy < $gridH; $gy++) {
+                $cy = ($gy + 0.5) * $cs;
+
+                $bestSlot = $this->players[0]->slot;
+                $bestScore = -1.0;
+
+                foreach ($this->players as $p) {
+                    // Signal 1: actual border-brush influence at this cell.
+                    $influence = $p->border->grid[$gx][$gy] ?? 0.0;
+
+                    // Signal 2: Voronoi proximity to nearest anchor.
+                    $minDistSq = PHP_FLOAT_MAX;
+                    foreach ($anchorsBySlot[$p->slot] as [$ax, $ay]) {
+                        $dx = $ax - $cx;
+                        $dy = $ay - $cy;
+                        $distSq = $dx * $dx + $dy * $dy;
+                        if ($distSq < $minDistSq) {
+                            $minDistSq = $distSq;
+                        }
+                    }
+                    $proximity = $scaleSq / ($scaleSq + $minDistSq);
+
+                    // Border-brush influence is multiplied by 5 so that a supply
+                    // line of troops (each contributing a 40 px brush radius) can
+                    // meaningfully push the border forward.  A lone isolated unit
+                    // deep in enemy territory (influence ≈ 0.02–0.05) barely
+                    // overcomes the Voronoi pull toward the enemy capital, so
+                    // troops must maintain connected lines to hold territory.
+                    $score = $influence * 5.0 + $proximity;
+
+                    if ($score > $bestScore) {
+                        $bestScore = $score;
+                        $bestSlot = $p->slot;
+                    }
+                }
+
+                $col[] = $bestSlot;
+            }
+            $territory[] = $col;
+        }
+
+        $playerColors = [];
+        foreach ($this->players as $p) {
+            $playerColors[$p->slot] = $p->color;
+        }
+
         return [
             'vision' => $player->vision->grid,
-            'border' => $player->border->grid,
+            'territory' => $territory,
+            'playerColors' => $playerColors,
             'troops' => $troops,
             'cities' => $cities,
         ];
     }
 
     /**
-     * @return list<int>
+     * Merges vision grids between players on the same team (teamIndex > 0).
+     * After individual vision brushes are applied, each player sees through their teammates' eyes.
      */
-    public function eliminatedSlots(): array
+    private function mergeTeamVision(): void
     {
-        $eliminated = [];
-
+        // Build teams: group players by non-zero teamIndex.
+        $teams = [];
         foreach ($this->players as $player) {
-            $ownedCities = array_filter($this->cities, fn (City $c) => $c->owner === $player);
-            if ($player->troops === [] && $ownedCities === []) {
-                $eliminated[] = $player->slot;
+            if ($player->teamIndex > 0) {
+                $teams[$player->teamIndex][] = $player;
             }
         }
 
-        return $eliminated;
+        foreach ($teams as $members) {
+            if (count($members) < 2) {
+                continue;
+            }
+
+            // Collect all grids for the team and OR (max) them together.
+            $rows = count($members[0]->vision->grid);
+            $cols = $rows > 0 ? count($members[0]->vision->grid[0]) : 0;
+            $merged = array_fill(0, $rows, array_fill(0, $cols, 0.0));
+
+            foreach ($members as $player) {
+                foreach ($player->vision->grid as $r => $row) {
+                    foreach ($row as $c => $val) {
+                        if ($val > $merged[$r][$c]) {
+                            $merged[$r][$c] = $val;
+                        }
+                    }
+                }
+            }
+
+            foreach ($members as $player) {
+                $player->vision->setGrid($merged);
+            }
+        }
     }
 
     public function winnerSlot(): ?int
     {
-        $active = array_filter($this->players, function (Player $player) {
-            $ownedCities = array_filter($this->cities, fn (City $c) => $c->owner === $player);
+        $totalCities = count($this->cities);
+        if ($totalCities === 0) {
+            return null;
+        }
 
-            return $player->troops !== [] || $ownedCities !== [];
-        });
+        $threshold = (int) ceil($totalCities * GameConstants::VICTORY_CITY_THRESHOLD);
 
-        if (count($active) === 1) {
-            return array_values($active)[0]->slot;
+        // Check for team-based win condition when any player has a non-zero teamIndex.
+        $hasTeams = array_any($this->players, fn (Player $p) => $p->teamIndex > 0);
+
+        if ($hasTeams) {
+            return $this->winnerSlotTeamMode($threshold);
+        }
+
+        foreach ($this->players as $candidate) {
+            // All enemy capitals must be captured.
+            $unconqueredEnemyCapitals = array_filter(
+                $this->cities,
+                fn (City $c) => $c->markerType === 'capital' && $c->owner !== $candidate,
+            );
+
+            if ($unconqueredEnemyCapitals !== []) {
+                continue;
+            }
+
+            // Must also own at least VICTORY_CITY_THRESHOLD of all cities.
+            $owned = count(array_filter($this->cities, fn (City $c) => $c->owner === $candidate));
+            if ($owned >= $threshold) {
+                return $candidate->slot;
+            }
+        }
+
+        return null;
+    }
+
+    private function winnerSlotTeamMode(int $threshold): ?int
+    {
+        // Group players by teamIndex.
+        $teams = [];
+        foreach ($this->players as $player) {
+            $ti = $player->teamIndex;
+            $teams[$ti][] = $player;
+        }
+
+        foreach ($teams as $members) {
+            // Collect all cities owned by any member of this team.
+            $memberSet = array_flip(array_map(fn (Player $p) => spl_object_id($p), $members));
+            $teamCities = array_filter($this->cities, fn (City $c) => $c->owner !== null && isset($memberSet[spl_object_id($c->owner)]));
+
+            // Check if all enemies have no troops or cities.
+            $teamHasWon = true;
+            foreach ($this->players as $other) {
+                if (isset($memberSet[spl_object_id($other)])) {
+                    continue;
+                }
+                $enemyCities = array_filter($this->cities, fn (City $c) => $c->owner === $other);
+                if ($other->troops !== [] || $enemyCities !== []) {
+                    $teamHasWon = false;
+                    break;
+                }
+            }
+
+            if ($teamHasWon && count($teamCities) >= $threshold) {
+                // Return the lowest slot of the winning team.
+                $slots = array_map(fn (Player $p) => $p->slot, $members);
+                sort($slots);
+
+                return $slots[0];
+            }
         }
 
         return null;

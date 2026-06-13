@@ -10,7 +10,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use LogicException;
 
-#[Fillable(['game_id', 'user_id', 'guest_key', 'display_name', 'slot', 'color'])]
+#[Fillable(['game_id', 'user_id', 'guest_key', 'display_name', 'slot', 'color', 'team_index'])]
 class GamePlayer extends Model
 {
     /** @use HasFactory<GamePlayerFactory> */

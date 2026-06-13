@@ -55,6 +55,18 @@ RUN php artisan key:generate --force
 
 RUN php artisan wayfinder:generate --with-form --no-interaction
 
+# VITE_REVERB_* must be baked into the JS bundle at build time.
+# Pass these as --build-arg in CI (from secrets) so the correct public hostname is embedded.
+ARG VITE_REVERB_APP_KEY=local-key
+ARG VITE_REVERB_HOST=localhost
+ARG VITE_REVERB_PORT=8080
+ARG VITE_REVERB_SCHEME=http
+
+ENV VITE_REVERB_APP_KEY=${VITE_REVERB_APP_KEY}
+ENV VITE_REVERB_HOST=${VITE_REVERB_HOST}
+ENV VITE_REVERB_PORT=${VITE_REVERB_PORT}
+ENV VITE_REVERB_SCHEME=${VITE_REVERB_SCHEME}
+
 RUN npm run build \
     && npm prune --omit=dev
 

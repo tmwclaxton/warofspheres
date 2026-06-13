@@ -14,6 +14,7 @@ export const TERRAIN_IDS = [
     'swamp',
     'desert',
     'beach',
+    'snow',
 ] as const;
 
 export type TerrainId = (typeof TERRAIN_IDS)[number];
@@ -37,6 +38,7 @@ export const EDITOR_TERRAIN_COLORS: Record<TerrainId, string> = {
     swamp: '#6b8f7a',
     desert: '#e6c87a',
     beach: '#f5e6b3',
+    snow: '#ddeeff',
 };
 
 export function isTerrainId(value: string): value is TerrainId {

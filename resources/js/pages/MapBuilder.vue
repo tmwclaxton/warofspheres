@@ -41,6 +41,7 @@ import {
     MAP_GRID_MIN_CELL_COLS,
     MAP_GRID_MIN_CELL_ROWS,
     isAllowedMapGridSize,
+    validateMapMarkers,
 } from '@/lib/mapEditorGrid';
 import { mapBuilder } from '@/routes';
 import { explore as mapsExplore, fork as forkMap, publish as publishMap } from '@/routes/maps';
@@ -480,6 +481,16 @@ function requestPublishConfirm(): void {
 
     if (editor.dirty.value) {
         toast.warning('Save your latest changes before publishing.');
+
+        return;
+    }
+
+    const markerErrors = validateMapMarkers(editor.getDataPayload());
+    if (markerErrors.length > 0) {
+        toast.error(
+            'Fix these issues before publishing:\n' + markerErrors.join('\n'),
+            12_000,
+        );
 
         return;
     }

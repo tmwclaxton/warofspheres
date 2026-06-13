@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Games;
 
 use App\Enums\GameStatus;
+use App\Events\ChatMessageSent;
 use App\Games\GameConstants;
 use App\Games\Services\GameManager;
 use App\Games\Services\GuestGameIdentity;
@@ -10,8 +11,10 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Games\CreateGameRequest;
 use App\Http\Requests\Games\RecruitTroopRequest;
 use App\Http\Requests\Games\SubmitOrdersRequest;
+use App\Models\ChatMessage;
 use App\Models\Game;
 use App\Models\GamePlayer;
+use App\Models\GameReplaySnapshot;
 use App\Models\Map;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -195,6 +198,16 @@ class GameController extends Controller
         return to_route('games.show', $game);
     }
 
+    public function leave(Request $request, Game $game, GameManager $gameManager): RedirectResponse
+    {
+        $user = $request->user();
+        $guestKey = $this->guestKeyFromSession($request);
+
+        $gameManager->leaveLobby($game, $user, $guestKey);
+
+        return to_route('lobbies.index');
+    }
+
     public function start(Request $request, Game $game, GameManager $gameManager): RedirectResponse
     {
         $gameManager->start($game, $request->user());
@@ -218,6 +231,7 @@ class GameController extends Controller
             'game' => $this->playPayload($game, $player),
             'snapshotUrl' => route('games.snapshot', $game),
             'spectatorMode' => false,
+            'gameConstants' => $this->gameConstantsProp(),
         ]);
     }
 
@@ -231,6 +245,7 @@ class GameController extends Controller
             'game' => $this->spectatePayload($game),
             'snapshotUrl' => route('games.spectate-snapshot', $game),
             'spectatorMode' => true,
+            'gameConstants' => $this->gameConstantsProp(),
         ]);
     }
 
@@ -271,7 +286,7 @@ class GameController extends Controller
         return $this->jsonSnapshotNoStore($payload);
     }
 
-    public function submitOrders(SubmitOrdersRequest $request, Game $game, GameManager $gameManager): RedirectResponse
+    public function submitOrders(SubmitOrdersRequest $request, Game $game, GameManager $gameManager): JsonResponse
     {
         $player = $this->actingPlayer($request, $game);
 
@@ -284,10 +299,10 @@ class GameController extends Controller
             $request->input('city_orders', []),
         ]);
 
-        return back();
+        return response()->json(['ok' => true]);
     }
 
-    public function recruit(RecruitTroopRequest $request, Game $game, GameManager $gameManager): RedirectResponse
+    public function recruit(RecruitTroopRequest $request, Game $game, GameManager $gameManager): JsonResponse
     {
         $player = $this->actingPlayer($request, $game);
 
@@ -297,7 +312,98 @@ class GameController extends Controller
 
         $gameManager->recruitInfantry($game, $player);
 
-        return back();
+        return response()->json(['ok' => true]);
+    }
+
+    public function replay(Request $request, Game $game): Response
+    {
+        $snapshots = GameReplaySnapshot::where('game_id', $game->id)
+            ->orderBy('world_tick')
+            ->get()
+            ->map(fn ($s) => [
+                'worldTick' => $s->world_tick,
+                'state' => $s->decodeState(),
+            ])
+            ->values()
+            ->toArray();
+
+        return Inertia::render('games/Replay', [
+            'game' => $game->only(['uuid', 'id']),
+            'snapshots' => $snapshots,
+        ]);
+    }
+
+    public function sendChat(Request $request, Game $game): JsonResponse
+    {
+        $player = $this->actingPlayer($request, $game);
+
+        if ($player === null) {
+            abort(403);
+        }
+
+        $validated = $request->validate([
+            'body' => ['required', 'string', 'max:200'],
+        ]);
+
+        $message = ChatMessage::create([
+            'game_id' => $game->id,
+            'game_player_id' => $player->id,
+            'body' => $validated['body'],
+        ]);
+
+        $senderName = $player->user?->name ?? 'Commander';
+
+        ChatMessageSent::dispatch($game, $message, $senderName, $player->slot);
+
+        return response()->json(['ok' => true]);
+    }
+
+    public function setCityProduction(Request $request, Game $game, GameManager $gameManager): JsonResponse
+    {
+        $player = $this->actingPlayer($request, $game);
+
+        if ($player === null) {
+            abort(403);
+        }
+
+        $validated = $request->validate([
+            'city_id' => ['required', 'integer'],
+            'production_tank_ratio' => ['nullable', 'integer', 'min:0', 'max:100'],
+            'production_speed_multiplier' => ['nullable', 'numeric', 'min:0', 'max:3'],
+        ]);
+
+        $speedMultiplier = isset($validated['production_speed_multiplier'])
+            ? (float) $validated['production_speed_multiplier']
+            : null;
+
+        // speed = 0 means idle; otherwise keep previous type or default to infantry
+        $productionType = $speedMultiplier !== null
+            ? ($speedMultiplier <= 0 ? 'none' : 'infantry')
+            : 'infantry';
+
+        $gameManager->setCityProduction(
+            $game,
+            $player,
+            (int) $validated['city_id'],
+            $productionType,
+            isset($validated['production_tank_ratio']) ? (int) $validated['production_tank_ratio'] : null,
+            $speedMultiplier,
+        );
+
+        return response()->json(['ok' => true]);
+    }
+
+    public function recruitTank(RecruitTroopRequest $request, Game $game, GameManager $gameManager): JsonResponse
+    {
+        $player = $this->actingPlayer($request, $game);
+
+        if ($player === null) {
+            abort(403);
+        }
+
+        $gameManager->recruitTank($game, $player);
+
+        return response()->json(['ok' => true]);
     }
 
     /**
@@ -315,6 +421,7 @@ class GameController extends Controller
                 'slot' => $p->slot,
                 'name' => $p->displayLabel(),
                 'color' => $p->color,
+                'teamIndex' => $p->team_index ?? 0,
             ]),
         ];
     }
@@ -416,12 +523,16 @@ class GameController extends Controller
         $game->loadMissing('map.user');
 
         $sourceMap = null;
+        $mapPreviewData = null;
         if ($game->map !== null) {
             $sourceMap = [
                 'uuid' => $game->map->uuid,
                 'name' => $game->map->name,
                 'by' => $game->map->user?->name ?? 'Unknown',
             ];
+            if (is_array($game->map->data)) {
+                $mapPreviewData = $game->map->data;
+            }
         } elseif (is_array($game->map_data)) {
             $snap = $game->map_data;
             $sourceMap = [
@@ -429,6 +540,9 @@ class GameController extends Controller
                 'name' => (string) ($snap['source_name'] ?? 'Unknown map'),
                 'by' => (string) ($snap['source_author'] ?? 'Unknown'),
             ];
+            if (is_array($snap['data'] ?? null)) {
+                $mapPreviewData = $snap['data'];
+            }
         }
 
         $isParticipant = ($userId !== null && $game->players->contains('user_id', $userId))
@@ -448,9 +562,24 @@ class GameController extends Controller
                 'slot' => $player->slot,
                 'name' => $player->displayLabel(),
                 'color' => $player->color,
+                'teamIndex' => $player->team_index ?? 0,
             ]),
             'sourceMap' => $sourceMap,
+            'mapPreviewData' => $mapPreviewData,
             'abortedReason' => ($game->settings ?? [])['aborted_reason'] ?? null,
+        ];
+    }
+
+    /**
+     * @return array{recruitCost: int, recruitCostTank: int, maxArmyPerPlayer: int, tickRate: int}
+     */
+    private function gameConstantsProp(): array
+    {
+        return [
+            'recruitCost' => GameConstants::ECONOMY_RECRUIT_COST,
+            'recruitCostTank' => GameConstants::ECONOMY_RECRUIT_COST_TANK,
+            'maxArmyPerPlayer' => GameConstants::ECONOMY_MAX_ARMY_PER_PLAYER,
+            'tickRate' => GameConstants::TICK_RATE,
         ];
     }
 }

@@ -22,7 +22,7 @@ class WikiTest extends TestCase
             ->has('troops', 2)
             ->has('settlements', 2)
             ->has('terrain', count(TerrainCatalog::IDS))
-            ->has('mapGeneration', 4)
+            ->has('mapGeneration', 8)
             ->where('mapGeneration.0.preview', '/images/wiki/map-generation-mix.svg')
             ->has('economyNotes', 5)
             ->where('economyNotes.0.icon', 'coins')
