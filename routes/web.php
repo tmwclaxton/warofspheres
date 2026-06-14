@@ -65,6 +65,7 @@ Route::middleware(['auth'])->group(function () {
     Route::get('matches/past', [GameController::class, 'past'])->name('matches.past');
     Route::post('games', [GameController::class, 'store'])->name('games.store');
     Route::post('games/{game}/start', [GameController::class, 'start'])->name('games.start');
+    Route::patch('games/{game}/player-profile', [GameController::class, 'updatePlayerProfile'])->name('games.player-profile');
 });
 
 require __DIR__.'/settings.php';

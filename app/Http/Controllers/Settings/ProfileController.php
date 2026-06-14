@@ -28,7 +28,10 @@ class ProfileController extends Controller
      */
     public function update(ProfileUpdateRequest $request): RedirectResponse
     {
-        $request->user()->update(['name' => $request->name]);
+        $request->user()->update([
+            'name' => $request->name,
+            'game_display_name' => $request->input('game_display_name') ?: null,
+        ]);
 
         Inertia::flash('toast', ['type' => 'success', 'message' => __('Profile updated.')]);
 

@@ -25,7 +25,7 @@ import UserMenuContent from '@/components/UserMenuContent.vue';
 import { useCurrentUrl } from '@/composables/useCurrentUrl';
 import { getInitials } from '@/composables/useInitials';
 import { GITHUB_REPOSITORY_URL } from '@/lib/site';
-import { home, mapBuilder, wiki } from '@/routes';
+import { home, login, mapBuilder, wiki } from '@/routes';
 import { index as lobbies } from '@/routes/lobbies';
 import { explore as mapsExplore } from '@/routes/maps';
 import { ongoing, past } from '@/routes/matches';
@@ -39,10 +39,10 @@ const { isCurrentOrParentUrl } = useCurrentUrl();
 
 const navItems = computed<NavItem[]>(() => {
     const items: NavItem[] = [
-        { title: 'Wiki', href: wiki().url, icon: BookOpen },
         { title: 'Explore', href: mapsExplore().url, icon: Globe2 },
-        { title: 'Map Builder', href: mapBuilder().url, icon: Map },
         { title: 'Lobbies', href: lobbies().url, icon: Users },
+        { title: 'Wiki', href: wiki().url, icon: BookOpen },
+        { title: 'Map Builder', href: mapBuilder().url, icon: Map },
         { title: 'Leaderboard', href: leaderboard().url, icon: Trophy },
         { title: 'Ongoing', href: ongoing().url, icon: Clock3 },
     ];
@@ -147,6 +147,14 @@ const navItems = computed<NavItem[]>(() => {
                         <UserMenuContent :user="user" />
                     </DropdownMenuContent>
                 </DropdownMenu>
+                <Button
+                    v-else
+                    variant="default"
+                    size="sm"
+                    as-child
+                >
+                    <Link :href="login().url">Sign in</Link>
+                </Button>
             </div>
         </div>
 

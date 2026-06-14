@@ -23,7 +23,7 @@ withDefaults(defineProps<Props>(), {
         </h2>
         <p
             v-if="description"
-            class="max-w-2xl text-sm leading-relaxed text-muted-foreground"
+            class="text-sm leading-relaxed text-muted-foreground"
         >
             {{ description }}
         </p>

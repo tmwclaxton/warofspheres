@@ -210,9 +210,41 @@ class GameController extends Controller
 
     public function start(Request $request, Game $game, GameManager $gameManager): RedirectResponse
     {
-        $gameManager->start($game, $request->user());
+        $gameManager->beginCountdown($game, $request->user());
 
-        return to_route('games.play', $game);
+        return to_route('games.show', $game);
+    }
+
+    public function updatePlayerProfile(Request $request, Game $game): RedirectResponse
+    {
+        $validated = $request->validate([
+            'display_name' => ['nullable', 'string', 'max:50'],
+            'color' => ['nullable', 'string', 'regex:/^#[0-9a-fA-F]{6}$/'],
+        ]);
+
+        $user = $request->user();
+        $guestKey = $this->guestKeyFromSession($request);
+
+        $player = $user !== null
+            ? $game->players()->where('user_id', $user->id)->first()
+            : ($guestKey !== null ? $game->players()->where('guest_key', $guestKey)->first() : null);
+
+        abort_if($player === null, 403);
+
+        $updates = array_filter([
+            'color' => $validated['color'] ?? null,
+            'display_name' => $validated['display_name'] ?? null,
+        ], fn ($v) => $v !== null);
+
+        if (! empty($updates)) {
+            $player->update($updates);
+        }
+
+        if ($user !== null && isset($validated['display_name'])) {
+            $user->update(['game_display_name' => $validated['display_name']]);
+        }
+
+        return back();
     }
 
     public function play(Request $request, Game $game): Response
@@ -548,6 +580,13 @@ class GameController extends Controller
         $isParticipant = ($userId !== null && $game->players->contains('user_id', $userId))
             || ($guestKey !== null && $game->players->contains('guest_key', $guestKey));
 
+        $myPlayer = null;
+        if ($userId !== null) {
+            $myPlayer = $game->players->firstWhere('user_id', $userId);
+        } elseif ($guestKey !== null) {
+            $myPlayer = $game->players->firstWhere('guest_key', $guestKey);
+        }
+
         return [
             'uuid' => $game->uuid,
             'code' => $game->code,
@@ -558,6 +597,10 @@ class GameController extends Controller
             'isParticipant' => $isParticipant,
             'canStart' => $game->canStart(),
             'hostName' => $game->host?->name,
+            'countdownStartedAt' => $game->countdown_started_at?->toIso8601String(),
+            'mySlot' => $myPlayer?->slot,
+            'myColor' => $myPlayer?->color,
+            'myDisplayName' => $myPlayer?->displayLabel(),
             'players' => $game->players->sortBy('slot')->values()->map(fn (GamePlayer $player) => [
                 'slot' => $player->slot,
                 'name' => $player->displayLabel(),

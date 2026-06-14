@@ -34,8 +34,13 @@ class GamePlayer extends Model
 
     public function displayLabel(): string
     {
-        return $this->user?->name
-            ?? (is_string($this->display_name) && $this->display_name !== '' ? $this->display_name : 'Guest');
+        if ($this->user !== null) {
+            return is_string($this->user->game_display_name) && $this->user->game_display_name !== ''
+                ? $this->user->game_display_name
+                : $this->user->name;
+        }
+
+        return is_string($this->display_name) && $this->display_name !== '' ? $this->display_name : 'Guest';
     }
 
     public function broadcastConnection(): string

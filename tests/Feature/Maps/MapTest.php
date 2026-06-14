@@ -40,10 +40,15 @@ class MapTest extends TestCase
         return $data;
     }
 
-    public function test_guests_cannot_access_map_builder_without_slug(): void
+    public function test_guests_can_access_map_builder_without_slug(): void
     {
         $this->get(route('map-builder'))
-            ->assertRedirect(route('login'));
+            ->assertOk()
+            ->assertInertia(fn (AssertableInertia $page) => $page
+                ->component('MapBuilder')
+                ->where('maps', [])
+                ->where('initialDocument', null)
+            );
     }
 
     public function test_guest_can_view_published_map_in_map_builder(): void

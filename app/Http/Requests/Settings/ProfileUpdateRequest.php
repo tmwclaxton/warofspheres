@@ -16,6 +16,7 @@ class ProfileUpdateRequest extends FormRequest
     {
         return [
             'name' => ['required', 'string', 'max:255'],
+            'game_display_name' => ['nullable', 'string', 'max:50'],
         ];
     }
 }

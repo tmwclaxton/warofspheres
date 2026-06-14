@@ -1,6 +1,7 @@
 export type User = {
     id: number;
     name: string;
+    game_display_name: string | null;
     email: string;
     avatar?: string;
     profile_uuid?: string;

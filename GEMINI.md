@@ -13,6 +13,7 @@ This application is a Laravel application and its main Laravel ecosystems packag
 - inertiajs/inertia-laravel (INERTIA_LARAVEL) - v3
 - laravel/framework (LARAVEL) - v13
 - laravel/prompts (PROMPTS) - v0
+- laravel/reverb (REVERB) - v1
 - laravel/wayfinder (WAYFINDER) - v0
 - laravel/boost (BOOST) - v2
 - laravel/mcp (MCP) - v0
@@ -21,35 +22,16 @@ This application is a Laravel application and its main Laravel ecosystems packag
 - laravel/sail (SAIL) - v1
 - phpunit/phpunit (PHPUNIT) - v12
 - \@inertiajs/vue3 (INERTIA_VUE) - v3
+- laravel-echo (ECHO) - v2
 - tailwindcss (TAILWINDCSS) - v4
 - vue (VUE) - v3
 - \@laravel/vite-plugin-wayfinder (WAYFINDER_VITE) - v0
 - eslint (ESLINT) - v9
 - prettier (PRETTIER) - v3
 
-## Frontend Libraries
-
-The following frontend libraries are installed and configured in this project:
-
-### Pinia (State Management)
-- Registered globally in `resources/js/app.ts` via `app.use(createPinia())`
-- Create stores in `resources/js/stores/` using `defineStore`
-- Import and use stores directly in Vue components with `useMyStore()`
-
-### Font Awesome (Icons)
-- All three icon sets are loaded: `fas` (solid), `far` (regular), `fab` (brands)
-- Registered as a global component - use `<font-awesome-icon>` anywhere without importing
-- Usage: `<font-awesome-icon :icon="['fas', 'user']" />` or `<font-awesome-icon :icon="['fab', 'github']" />`
-- Do NOT import FontAwesomeIcon per-component; it is already globally registered
-
-### Lucide (Icons)
-- Available via `lucide-vue-next` - import individual icons per-component (tree-shakeable)
-- Usage: `import { House, Settings } from 'lucide-vue-next'` then `<House />` in template
-- Browse all icons at https://lucide.dev/icons
-
 ## Skills Activation
 
-This project has domain-specific skills available in `**/skills/**`. You MUST activate the relevant skill whenever you work in that domain-don't wait until you're stuck.
+This project has domain-specific skills available in `**/skills/**`. You MUST activate the relevant skill whenever you work in that domain—don't wait until you're stuck.
 
 ## Conventions
 

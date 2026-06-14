@@ -11,6 +11,7 @@ use App\Games\Engine\Environment;
 use App\Games\Engine\Player;
 use App\Games\GameConstants;
 use App\Games\Logging\GameSimLog;
+use App\Jobs\LaunchLobbyJob;
 use App\Maps\MapMarkers;
 use App\Models\Game;
 use App\Models\GamePlayer;
@@ -200,10 +201,33 @@ final class GameManager
     }
 
     /**
+     * Initiates a 10-second countdown before the game launches.
+     * Records the timestamp and schedules a job to call launch() after the delay.
+     */
+    public function beginCountdown(Game $game, User $user): void
+    {
+        if ($game->host_user_id !== $user->id) {
+            abort(403, 'Only the host can start the game.');
+        }
+
+        if (! $game->canStart()) {
+            abort(422, 'Need at least two players to start.');
+        }
+
+        if ($game->countdown_started_at !== null) {
+            return;
+        }
+
+        $game->update(['countdown_started_at' => now()]);
+
+        LaunchLobbyJob::dispatch($game->id)->delay(now()->addSeconds(10));
+    }
+
+    /**
      * Performs the actual game launch: transitions status to Playing, initialises
      * the environment, stores live state, and broadcasts GameInitialized to all players.
      */
-    private function launch(Game $game): Game
+    public function launch(Game $game): Game
     {
         if ($game->status === GameStatus::Lobby) {
             $this->assertLobbyWithinMaxAge($game);
@@ -278,14 +302,19 @@ final class GameManager
     }
 
     /**
-     * Auto-starts the game if all slots are now filled.
+     * Starts the countdown when all slots are filled, giving players 10 seconds
+     * to customise their profile before the game launches.
      */
     private function autoStartIfFull(Game $game): void
     {
         $game->unsetRelation('players');
-        if ($game->canStart()) {
-            $this->launch($game);
+        if (! $game->canStart() || $game->countdown_started_at !== null) {
+            return;
         }
+
+        $game->update(['countdown_started_at' => now()]);
+
+        LaunchLobbyJob::dispatch($game->id)->delay(now()->addSeconds(10));
     }
 
     /**

@@ -63,6 +63,22 @@ const user = computed(() => page.props.auth.user);
             </div>
 
             <div class="grid gap-2">
+                <Label for="game_display_name">Game display name</Label>
+                <Input
+                    id="game_display_name"
+                    class="mt-1 block w-full"
+                    name="game_display_name"
+                    :default-value="user?.game_display_name ?? ''"
+                    maxlength="50"
+                    placeholder="Leave blank to use your account name"
+                />
+                <p class="text-sm text-muted-foreground">
+                    The name other players see in battle lobbies and games. Defaults to your account name if left blank.
+                </p>
+                <InputError class="mt-2" :message="errors.game_display_name" />
+            </div>
+
+            <div class="grid gap-2">
                 <Label for="email">Email address</Label>
                 <Input
                     id="email"

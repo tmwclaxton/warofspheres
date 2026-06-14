@@ -59,7 +59,6 @@ const createForm = useForm({
 
 const joinForm = useForm({
     code: '',
-    display_name: '',
 });
 
 const selectedMap = computed(() =>
@@ -196,12 +195,38 @@ onBeforeUnmount(() => stopQsPoll());
             </div>
         </div>
 
+        <!-- Quick Start: queued / matched state (shown when not idle) -->
+        <div v-if="!myLobby && qsState.status !== 'none'" class="wod-panel p-5">
+            <div class="flex items-center gap-2 mb-3">
+                <div class="wod-swatch bg-wod-yellow" aria-hidden="true" />
+                <h2 class="font-bold">Quick Start</h2>
+            </div>
+            <template v-if="qsState.status === 'queued'">
+                <div class="flex items-center gap-3 mb-4">
+                    <Loader2 class="h-5 w-5 animate-spin text-muted-foreground" />
+                    <div>
+                        <p class="text-sm font-semibold">Finding you a game…</p>
+                        <p class="text-xs text-muted-foreground">
+                            {{ qsState.queueSize }} {{ qsState.queueSize === 1 ? 'person' : 'people' }} in the pool
+                        </p>
+                    </div>
+                </div>
+                <Button variant="outline" size="sm" @click="leaveQuickStart">
+                    Cancel
+                </Button>
+            </template>
+            <template v-else-if="qsState.status === 'matched'">
+                <p class="text-sm font-semibold text-green-600">Match found — redirecting…</p>
+            </template>
+        </div>
+
+        <!-- Action panels: Create lobby (auth) · Join by code · Quick Start -->
         <div
             v-if="!myLobby && qsState.status === 'none'"
             class="grid gap-4"
-            :class="page.props.auth.user ? 'lg:grid-cols-2' : ''"
+            :class="page.props.auth.user ? 'lg:grid-cols-3' : 'lg:grid-cols-2'"
         >
-            <div v-if="page.props.auth.user" class="wod-panel space-y-4 p-5">
+            <div v-if="page.props.auth.user" class="wod-panel flex flex-col gap-4 p-5">
                 <div class="flex items-center gap-2">
                     <div class="wod-swatch bg-wod-red" aria-hidden="true" />
                     <h2 class="font-bold">Create lobby</h2>
@@ -210,7 +235,7 @@ onBeforeUnmount(() => stopQsPoll());
                     No published maps yet. Publish one from the Map Builder or explore the gallery.
                 </div>
                 <template v-else>
-                    <div class="space-y-2">
+                    <div class="flex-1 space-y-2">
                         <Label for="map_uuid">Published map</Label>
                         <Select v-model="createForm.map_uuid">
                             <SelectTrigger id="map_uuid" class="w-full">
@@ -246,18 +271,27 @@ onBeforeUnmount(() => stopQsPoll());
                 </template>
             </div>
 
-            <div class="wod-panel space-y-4 p-5">
+            <!-- Quick Start: idle state -->
+            <div class="wod-panel flex flex-col gap-4 p-5">
+                <div class="flex items-center gap-2">
+                    <div class="wod-swatch bg-wod-yellow" aria-hidden="true" />
+                    <h2 class="font-bold">Quick Start</h2>
+                </div>
+                <p class="flex-1 text-sm text-muted-foreground">
+                    Don't mind what you play? Join the pool and we'll drop you straight into a lobby the moment there's a fit — no browsing required.
+                </p>
+                <Button :disabled="qsLoading" @click="joinQuickStart">
+                    <Zap class="mr-2 h-4 w-4" />
+                    Quick Start
+                </Button>
+            </div>
+
+            <div class="wod-panel flex flex-col gap-4 p-5">
                 <div class="flex items-center gap-2">
                     <div class="wod-swatch bg-wod-blue" aria-hidden="true" />
                     <h2 class="font-bold">Join by code</h2>
                 </div>
-                <p
-                    v-if="!page.props.auth.user"
-                    class="text-xs text-muted-foreground"
-                >
-                    No account needed — your browser keeps a guest session so you can rejoin if you disconnect.
-                </p>
-                <div class="space-y-2">
+                <div class="flex-1 space-y-2">
                     <Label for="code">Lobby code</Label>
                     <Input
                         id="code"
@@ -268,16 +302,6 @@ onBeforeUnmount(() => stopQsPoll());
                     />
                     <InputError :message="joinForm.errors.code" />
                 </div>
-                <div v-if="!page.props.auth.user" class="space-y-2">
-                    <Label for="join-display">Display name (optional)</Label>
-                    <Input
-                        id="join-display"
-                        v-model="joinForm.display_name"
-                        maxlength="50"
-                        placeholder="Guest"
-                    />
-                    <InputError :message="joinForm.errors.display_name" />
-                </div>
                 <Button
                     variant="outline"
                     :disabled="joinForm.processing"
@@ -286,40 +310,6 @@ onBeforeUnmount(() => stopQsPoll());
                     Join lobby
                 </Button>
             </div>
-        </div>
-
-        <!-- Quick Start -->
-        <div v-if="!myLobby" class="wod-panel p-5">
-            <div class="flex items-center gap-2 mb-3">
-                <div class="wod-swatch bg-wod-yellow" aria-hidden="true" />
-                <h2 class="font-bold">Quick Start</h2>
-            </div>
-            <template v-if="qsState.status === 'none'">
-                <p class="text-sm text-muted-foreground mb-4">
-                    Don't mind what you play? Join the pool and we'll drop you straight into a lobby the moment there's a fit — no browsing required.
-                </p>
-                <Button :disabled="qsLoading" @click="joinQuickStart">
-                    <Zap class="mr-2 h-4 w-4" />
-                    Quick Start
-                </Button>
-            </template>
-            <template v-else-if="qsState.status === 'queued'">
-                <div class="flex items-center gap-3 mb-4">
-                    <Loader2 class="h-5 w-5 animate-spin text-muted-foreground" />
-                    <div>
-                        <p class="text-sm font-semibold">Finding you a game…</p>
-                        <p class="text-xs text-muted-foreground">
-                            {{ qsState.queueSize }} {{ qsState.queueSize === 1 ? 'person' : 'people' }} in the pool
-                        </p>
-                    </div>
-                </div>
-                <Button variant="outline" size="sm" @click="leaveQuickStart">
-                    Cancel
-                </Button>
-            </template>
-            <template v-else-if="qsState.status === 'matched'">
-                <p class="text-sm font-semibold text-green-600">Match found — redirecting…</p>
-            </template>
         </div>
 
         <div class="space-y-3">

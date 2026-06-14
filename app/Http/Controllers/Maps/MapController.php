@@ -12,7 +12,6 @@ use App\Maps\TerrainCatalog;
 use App\Models\Map;
 use App\Models\MapVote;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response as HttpResponse;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -113,12 +112,8 @@ class MapController extends Controller
      *
      * Guests may open **published** maps only (read-only in the UI). The bare editor requires authentication.
      */
-    public function builder(Request $request, ?Map $map = null): InertiaResponse|RedirectResponse
+    public function builder(Request $request, ?Map $map = null): InertiaResponse
     {
-        if ($map === null && ! $request->user()) {
-            return redirect()->guest(route('login'));
-        }
-
         if ($map !== null) {
             Gate::authorize('view', $map);
         }

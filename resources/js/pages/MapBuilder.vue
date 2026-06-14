@@ -43,7 +43,7 @@ import {
     isAllowedMapGridSize,
     validateMapMarkers,
 } from '@/lib/mapEditorGrid';
-import { mapBuilder } from '@/routes';
+import { login as loginRoute, mapBuilder } from '@/routes';
 import { explore as mapsExplore, fork as forkMap, publish as publishMap } from '@/routes/maps';
 import { useToastStore } from '@/stores/toastStore';
 
@@ -135,6 +135,7 @@ watch(
 
 const auth = computed(() => page.props.auth as { user?: object } | undefined);
 const allowLibraryMutations = computed(() => Boolean(auth.value?.user));
+const isGuest = computed(() => !auth.value?.user);
 
 const AUTO_SAVE_DEBOUNCE_MS = 3500;
 
@@ -623,7 +624,30 @@ onUnmounted(() => {
         </div>
     </div>
 
-    <div v-else class="flex h-full min-h-0 flex-1 flex-col gap-2 overflow-hidden">
+    <div v-else class="relative flex h-full min-h-0 flex-1 flex-col gap-2 overflow-hidden">
+        <div
+            v-if="isGuest"
+            class="absolute inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-background/70 backdrop-blur-sm"
+        >
+            <div class="wod-panel flex max-w-sm flex-col items-center gap-4 p-8 text-center shadow-xl">
+                <div
+                    class="flex size-14 items-center justify-center rounded-lg border-2 border-foreground bg-muted/40"
+                    aria-hidden="true"
+                >
+                    <Lock class="size-7 text-muted-foreground" />
+                </div>
+                <div class="space-y-2">
+                    <h2 class="font-display text-xl font-bold">Log in to make your own maps</h2>
+                    <p class="text-sm leading-relaxed text-muted-foreground">
+                        Create, edit, and publish custom maps for the community to play on.
+                    </p>
+                </div>
+                <Button as-child class="w-full">
+                    <Link :href="loginRoute().url">Log in</Link>
+                </Button>
+            </div>
+        </div>
+
         <div class="flex flex-wrap items-center gap-2 wod-surface px-3 py-2">
             <label class="sr-only" for="map-builder-name">Map name</label>
             <Input
