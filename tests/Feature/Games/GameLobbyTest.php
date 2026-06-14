@@ -279,4 +279,97 @@ class GameLobbyTest extends TestCase
             ->getJson(route('games.snapshot', $game))
             ->assertNotFound();
     }
+
+    public function test_spectate_page_renders_for_playing_game(): void
+    {
+        Queue::fake();
+
+        $host = User::factory()->create();
+        $guest = User::factory()->create();
+        $owner = User::factory()->create();
+        $map = Map::factory()->for($owner)->playablePublishedTwoTeam()->create();
+
+        $this->actingAs($host)
+            ->post(route('games.store'), ['map_uuid' => $map->uuid]);
+        $game = Game::query()->firstOrFail();
+
+        $this->actingAs($guest)
+            ->post(route('games.join', $game));
+
+        $this->actingAs($host)
+            ->post(route('games.start', $game));
+
+        $game->refresh();
+
+        $this->get(route('games.spectate', $game))
+            ->assertOk()
+            ->assertInertia(fn ($page) => $page
+                ->component('games/Play')
+                ->has('game')
+                ->where('spectatorMode', true)
+                ->has('snapshotUrl')
+            );
+    }
+
+    public function test_spectate_page_returns_404_while_in_lobby(): void
+    {
+        $host = User::factory()->create();
+        $owner = User::factory()->create();
+        $map = Map::factory()->for($owner)->playablePublishedTwoTeam()->create();
+
+        $this->actingAs($host)
+            ->post(route('games.store'), ['map_uuid' => $map->uuid]);
+        $game = Game::query()->firstOrFail();
+
+        $this->get(route('games.spectate', $game))
+            ->assertNotFound();
+    }
+
+    public function test_spectate_snapshot_endpoint_returns_json_for_playing_game(): void
+    {
+        Queue::fake();
+
+        $host = User::factory()->create();
+        $guest = User::factory()->create();
+        $owner = User::factory()->create();
+        $map = Map::factory()->for($owner)->playablePublishedTwoTeam()->create();
+
+        $this->actingAs($host)
+            ->post(route('games.store'), ['map_uuid' => $map->uuid]);
+        $game = Game::query()->firstOrFail();
+
+        $this->actingAs($guest)
+            ->post(route('games.join', $game));
+
+        $this->actingAs($host)
+            ->post(route('games.start', $game));
+
+        $game->refresh();
+
+        $this->getJson(route('games.spectate-snapshot', $game))
+            ->assertOk()
+            ->assertHeader('Cache-Control')
+            ->assertJsonStructure([
+                'gameUuid',
+                'slot',
+                'color',
+                'terrain',
+                'world',
+                'state',
+            ]);
+    }
+
+    public function test_spectate_snapshot_returns_404_while_in_lobby(): void
+    {
+        $host = User::factory()->create();
+        $owner = User::factory()->create();
+        $map = Map::factory()->for($owner)->playablePublishedTwoTeam()->create();
+
+        $this->actingAs($host)
+            ->post(route('games.store'), ['map_uuid' => $map->uuid]);
+        $game = Game::query()->firstOrFail();
+
+        $this->getJson(route('games.spectate-snapshot', $game))
+            ->assertNotFound();
+    }
 }

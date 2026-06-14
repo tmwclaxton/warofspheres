@@ -24,6 +24,10 @@ final class Player
         public int $teamIndex = 0,
     ) {
         $this->border = new MarchingSquares;
+        // Border must be sized to the actual map dimensions, not the default constants.
+        // The brush clamps writes using count(grid), so an undersized grid silently drops
+        // all brush stamps for players whose start positions exceed the default grid bounds.
+        $this->border->setGrid(MarchingSquares::emptyGrid($environment->gridMaxX, $environment->gridMaxY));
         $this->vision = new MarchingSquares;
         $this->vision->setGrid($environment->defaultVision);
         $this->troops = [new Troop($this->startPos, $this, $initialTroopId, null, -1)];
@@ -56,7 +60,23 @@ final class Player
         $firstTroopId = $data['troops'][0]['id'] ?? 1;
         $player = new self($data['startPos'], $data['color'], $data['slot'], $environment, $firstTroopId, (int) ($data['teamIndex'] ?? 0));
         $player->troops = [];
-        $player->border->setGrid($data['border']);
+
+        // Merge stored border values into the correctly-sized grid that the constructor
+        // already created.  Stored grids from before this fix may be default-sized (64×35),
+        // so we copy only cells that exist in both the stored data and the map grid rather
+        // than replacing the correctly-sized grid wholesale.
+        $borderGrid = $player->border->grid;
+        foreach (($data['border'] ?? []) as $gx => $col) {
+            if (! isset($borderGrid[$gx])) {
+                continue;
+            }
+            foreach ((array) $col as $gy => $val) {
+                if (isset($borderGrid[$gx][$gy])) {
+                    $borderGrid[$gx][$gy] = (float) $val;
+                }
+            }
+        }
+        $player->border->setGrid($borderGrid);
         // vision is not persisted; Environment::recomputeVision() rebuilds it from current
         // troop positions before any drawInfo() call. The constructor already initialises it
         // to defaultVision, so fog-of-war is safe even before recomputeVision() runs.

@@ -456,7 +456,7 @@ onUnmounted(() => {
         <div class="relative min-h-0 flex-1">
             <!-- Loading overlays -->
             <div
-                v-if="(spectatorMode || !store.initialized) && !store.matchEnded && store.winnerUserId === null && store.winnerSlot === null"
+                v-if="!store.initialized && !store.matchEnded && store.winnerUserId === null && store.winnerSlot === null"
                 class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-background/90 text-center"
             >
                 <p class="text-sm font-semibold text-muted-foreground">
