@@ -3,9 +3,7 @@
 namespace Tests\Feature\Games;
 
 use App\Enums\GameStatus;
-use App\Games\Services\GameManager;
 use App\Games\Services\GuestGameIdentity;
-use App\Jobs\LaunchLobbyJob;
 use App\Models\Game;
 use App\Models\Map;
 use App\Models\User;
@@ -129,19 +127,10 @@ class GameLobbyTest extends TestCase
         $this->actingAs($guest)
             ->post(route('games.join', $game));
 
-        // Host starts the countdown — now redirects to the lobby (not play) while countdown runs.
+        // Host starts the game — launches immediately, redirects to the show page.
         $this->actingAs($host)
             ->post(route('games.start', $game))
             ->assertRedirect(route('games.show', $game));
-
-        $game->refresh();
-
-        $this->assertSame(GameStatus::Lobby, $game->status);
-        $this->assertNotNull($game->countdown_started_at);
-
-        // Simulate the job firing after the countdown elapses.
-        Queue::assertPushed(LaunchLobbyJob::class);
-        (new LaunchLobbyJob($game->id))->handle(app(GameManager::class));
 
         $game->refresh();
 
@@ -177,17 +166,12 @@ class GameLobbyTest extends TestCase
         $this->assertNull($game->map_id);
         $this->assertIsArray($game->map_data);
 
-        // Start begins the countdown and redirects to the lobby page.
+        // Start launches immediately, redirecting to the show page.
         $this->actingAs($host)
             ->post(route('games.start', $game))
             ->assertRedirect(route('games.show', $game));
 
         // Map data is preserved in the snapshot even after the map is deleted.
-        $game->refresh();
-        $this->assertNotNull($game->countdown_started_at);
-
-        (new LaunchLobbyJob($game->id))->handle(app(GameManager::class));
-
         $this->assertSame(GameStatus::Playing, $game->fresh()->status);
     }
 
@@ -207,11 +191,9 @@ class GameLobbyTest extends TestCase
         $this->actingAs($guest)
             ->post(route('games.join', $game));
 
+        // Host starts — game launches immediately.
         $this->actingAs($host)
             ->post(route('games.start', $game));
-
-        // Simulate the launch job firing after the countdown.
-        (new LaunchLobbyJob($game->id))->handle(app(GameManager::class));
 
         $game->refresh();
         $expectedCells = $game->map_data['data']['cells'] ?? null;

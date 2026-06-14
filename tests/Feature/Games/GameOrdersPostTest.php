@@ -42,7 +42,7 @@ class GameOrdersPostTest extends TestCase
 
         $this->actingAs($host)
             ->post(route('games.start', $game))
-            ->assertRedirect(route('games.play', $game));
+            ->assertRedirect(route('games.show', $game));
 
         $game->refresh();
         $this->assertSame(GameStatus::Playing, $game->status);

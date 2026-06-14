@@ -40,9 +40,7 @@ final class GameConstants
     /** Morale recovered per tick when not in combat and in supply (near owned city). */
     public const float TROOP_MORALE_REST_GAIN = 0.22;
 
-    /** If supply line to capital is this blocked (0–1), apply extra morale drain (encirclement). */
-    public const float TROOP_SUPPLY_CUT_THRESHOLD = 0.55;
-
+    /** Morale drain applied when a troop is encircled (in enemy territory). */
     public const float TROOP_SUPPLY_CUT_MORALE_DRAIN = 0.5;
 
     /** Starting credits per commander (spent on recruits). */

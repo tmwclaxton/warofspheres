@@ -71,6 +71,7 @@ class ProfileController extends Controller
         return Inertia::render('community/ProfileShow', [
             'profile' => [
                 'name' => $profile->name,
+                'playerTag' => $profile->game_display_name ?: $profile->name,
                 'avatar' => $profile->avatar,
                 'profileUuid' => $profile->profile_uuid,
                 'memberSince' => $profile->created_at?->toIso8601String(),
@@ -89,7 +90,7 @@ class ProfileController extends Controller
         return array_merge(
             [
                 'profileUuid' => $user->profile_uuid,
-                'name' => $user->name,
+                'name' => $user->game_display_name ?: $user->name,
                 'avatar' => $user->avatar,
             ],
             $this->statsFromUserCounts($user),

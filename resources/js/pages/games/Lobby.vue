@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Head, Link, router, useForm, usePage, usePoll } from '@inertiajs/vue3';
-import { Loader2, Plus, Zap } from 'lucide-vue-next';
-import { computed, onBeforeUnmount, ref } from 'vue';
+import { Loader2, Lock, Plus, Tag, Users, Zap } from 'lucide-vue-next';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import Heading from '@/components/Heading.vue';
 import InputError from '@/components/InputError.vue';
 import { Badge } from '@/components/ui/badge';
@@ -15,7 +15,9 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
+import { login as loginRoute } from '@/routes';
 import { joinCode, leave, show, store } from '@/routes/games';
+import { update as updatePlayerTag } from '@/routes/player-tag';
 import { join as qsJoin, leave as qsLeave, status as qsStatus } from '@/routes/quick-start';
 
 type Lobby = {
@@ -47,11 +49,20 @@ type QsStatus = {
 const props = defineProps<{
     lobbies: Lobby[];
     publishedMaps: PublishedMap[];
+    playerTag: string | null;
 }>();
 
 usePoll(2000, { only: ['lobbies'] });
 
 const page = usePage();
+
+const playerTagForm = useForm({
+    player_tag: props.playerTag ?? '',
+});
+
+function savePlayerTag() {
+    playerTagForm.patch(updatePlayerTag().url);
+}
 
 const createForm = useForm({
     map_uuid: '',
@@ -85,6 +96,7 @@ function joinLobby() {
 const qsState = ref<QsStatus>({ status: 'none', queueSize: 0, gameUuid: null });
 const qsLoading = ref(false);
 let qsPollTimer: ReturnType<typeof setInterval> | null = null;
+let qsIdlePollTimer: ReturnType<typeof setInterval> | null = null;
 
 function startQsPoll() {
     if (qsPollTimer !== null) return;
@@ -113,8 +125,35 @@ function stopQsPoll() {
     }
 }
 
+async function fetchQueueSize(): Promise<void> {
+    try {
+        const res = await fetch(qsStatus().url, { headers: { Accept: 'application/json' } });
+        if (!res.ok) return;
+        const data: QsStatus = await res.json();
+        if (qsState.value.status === 'none') {
+            qsState.value = { ...qsState.value, queueSize: data.queueSize };
+        }
+    } catch {
+        // network blip — ignore
+    }
+}
+
+function startQsIdlePoll(): void {
+    if (qsIdlePollTimer !== null) return;
+    void fetchQueueSize();
+    qsIdlePollTimer = setInterval(fetchQueueSize, 5000);
+}
+
+function stopQsIdlePoll(): void {
+    if (qsIdlePollTimer !== null) {
+        clearInterval(qsIdlePollTimer);
+        qsIdlePollTimer = null;
+    }
+}
+
 async function joinQuickStart() {
     qsLoading.value = true;
+    stopQsIdlePoll();
     try {
         const res = await fetch(qsJoin().url, {
             method: 'POST',
@@ -126,13 +165,18 @@ async function joinQuickStart() {
                 ),
             },
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+            startQsIdlePoll();
+            return;
+        }
         const data: QsStatus = await res.json();
         qsState.value = data;
         if (data.status === 'matched' && data.gameUuid) {
             router.visit(show(data.gameUuid).url);
         } else if (data.status === 'queued') {
             startQsPoll();
+        } else {
+            startQsIdlePoll();
         }
     } finally {
         qsLoading.value = false;
@@ -151,9 +195,17 @@ async function leaveQuickStart() {
         },
     });
     qsState.value = { status: 'none', queueSize: 0, gameUuid: null };
+    startQsIdlePoll();
 }
 
-onBeforeUnmount(() => stopQsPoll());
+onMounted(() => {
+    startQsIdlePoll();
+});
+
+onBeforeUnmount(() => {
+    stopQsPoll();
+    stopQsIdlePoll();
+});
 </script>
 
 <template>
@@ -164,6 +216,35 @@ onBeforeUnmount(() => stopQsPoll());
             title="Lobby Overview"
             description="Pick a published map — lobby size matches the map’s team count. Everyone must join before the host can start."
         />
+
+        <!-- Player tag -->
+        <div v-if="page.props.auth.user" class="wod-panel flex flex-col gap-3 p-4 sm:flex-row sm:items-end sm:gap-4">
+            <div class="flex items-center gap-2 sm:shrink-0">
+                <Tag class="size-4 text-muted-foreground" aria-hidden="true" />
+                <span class="font-bold">Your player tag</span>
+            </div>
+            <div class="flex flex-1 flex-col gap-2 sm:flex-row sm:items-center">
+                <div class="flex-1 space-y-1">
+                    <Input
+                        v-model="playerTagForm.player_tag"
+                        maxlength="50"
+                        placeholder="Commander#1234"
+                        class="w-full sm:max-w-xs"
+                        @keydown.enter="savePlayerTag"
+                    />
+                    <InputError :message="playerTagForm.errors.player_tag" />
+                </div>
+                <Button
+                    size="sm"
+                    variant="outline"
+                    :disabled="playerTagForm.processing || !playerTagForm.player_tag"
+                    class="shrink-0"
+                    @click="savePlayerTag"
+                >
+                    {{ playerTagForm.recentlySuccessful ? 'Saved!' : 'Save tag' }}
+                </Button>
+            </div>
+        </div>
 
         <!-- Your current lobby -->
         <div v-if="myLobby" class="space-y-3">
@@ -223,10 +304,33 @@ onBeforeUnmount(() => stopQsPoll());
         <!-- Action panels: Create lobby (auth) · Join by code · Quick Start -->
         <div
             v-if="!myLobby && qsState.status === 'none'"
-            class="grid gap-4"
-            :class="page.props.auth.user ? 'lg:grid-cols-3' : 'lg:grid-cols-2'"
+            class="grid gap-4 lg:grid-cols-3"
         >
-            <div v-if="page.props.auth.user" class="wod-panel flex flex-col gap-4 p-5">
+            <div class="relative wod-panel flex flex-col gap-4 p-5">
+                <!-- Frosted glass overlay for guests -->
+                <div
+                    v-if="!page.props.auth.user"
+                    class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 rounded-[inherit] bg-background/70 backdrop-blur-sm"
+                >
+                    <div class="flex flex-col items-center gap-3 p-4 text-center">
+                        <div
+                            class="flex size-12 items-center justify-center rounded-lg border-2 border-foreground bg-muted/40"
+                            aria-hidden="true"
+                        >
+                            <Lock class="size-6 text-muted-foreground" />
+                        </div>
+                        <div class="space-y-1">
+                            <p class="font-bold">Log in to create a game</p>
+                            <p class="text-xs text-muted-foreground">
+                                Host your own lobby and invite friends.
+                            </p>
+                        </div>
+                        <Button as-child size="sm" class="mt-1">
+                            <Link :href="loginRoute().url">Log in</Link>
+                        </Button>
+                    </div>
+                </div>
+
                 <div class="flex items-center gap-2">
                     <div class="wod-swatch bg-wod-red" aria-hidden="true" />
                     <h2 class="font-bold">Create lobby</h2>
@@ -273,9 +377,18 @@ onBeforeUnmount(() => stopQsPoll());
 
             <!-- Quick Start: idle state -->
             <div class="wod-panel flex flex-col gap-4 p-5">
-                <div class="flex items-center gap-2">
-                    <div class="wod-swatch bg-wod-yellow" aria-hidden="true" />
-                    <h2 class="font-bold">Quick Start</h2>
+                <div class="flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-2">
+                        <div class="wod-swatch bg-wod-yellow" aria-hidden="true" />
+                        <h2 class="font-bold">Quick Start</h2>
+                    </div>
+                    <span
+                        v-if="qsState.queueSize > 0"
+                        class="inline-flex items-center gap-1 rounded-full border border-foreground/20 bg-muted/60 px-2 py-0.5 text-xs font-semibold tabular-nums text-muted-foreground"
+                    >
+                        <Users class="size-3 shrink-0" aria-hidden="true" />
+                        {{ qsState.queueSize }} waiting
+                    </span>
                 </div>
                 <p class="flex-1 text-sm text-muted-foreground">
                     Don't mind what you play? Join the pool and we'll drop you straight into a lobby the moment there's a fit — no browsing required.

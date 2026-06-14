@@ -4,12 +4,14 @@ import { Calendar, ExternalLink, Swords, Trophy } from 'lucide-vue-next';
 import Heading from '@/components/Heading.vue';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
+import { avatarUrl } from '@/composables/useAvatar';
 import { getInitials } from '@/composables/useInitials';
 import { mapBuilder } from '@/routes';
 import { index as leaderboardIndex } from '@/routes/leaderboard';
 
 type Profile = {
     name: string;
+    playerTag: string;
     avatar: string;
     profileUuid: string;
     memberSince: string | null;
@@ -54,24 +56,23 @@ function formatDate(iso: string | null): string {
 </script>
 
 <template>
-    <Head :title="`${profile.name} · Profile`" />
+    <Head :title="`${profile.playerTag} · Profile`" />
 
     <div class="mx-auto flex max-w-3xl flex-col gap-8">
         <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div class="flex items-start gap-4">
-                <Avatar class="size-20 border-2 border-foreground">
+                <Avatar class="size-20 border-2 border-foreground bg-black">
                     <AvatarImage
-                        v-if="profile.avatar"
-                        :src="profile.avatar"
-                        :alt="profile.name"
+                        :src="avatarUrl(profile.profileUuid)"
+                        :alt="profile.playerTag"
                     />
                     <AvatarFallback class="text-lg font-bold">
-                        {{ getInitials(profile.name) }}
+                        {{ getInitials(profile.playerTag) }}
                     </AvatarFallback>
                 </Avatar>
                 <div>
                     <h1 class="font-display text-2xl font-bold sm:text-3xl">
-                        {{ profile.name }}
+                        {{ profile.playerTag }}
                     </h1>
                     <p
                         v-if="profile.memberSince"

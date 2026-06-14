@@ -4,6 +4,7 @@ import { Trophy } from 'lucide-vue-next';
 import Heading from '@/components/Heading.vue';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
+import { avatarUrl } from '@/composables/useAvatar';
 import { getInitials } from '@/composables/useInitials';
 import { show as profileShow } from '@/routes/profiles';
 
@@ -67,10 +68,9 @@ defineProps<{
                                 :href="profileShow.url(row.profileUuid)"
                                 class="flex items-center gap-3 font-medium text-foreground underline-offset-4 hover:underline"
                             >
-                                <Avatar class="size-9 border-2 border-foreground">
+                                <Avatar class="size-9 border-2 border-foreground bg-black">
                                     <AvatarImage
-                                        v-if="row.avatar"
-                                        :src="row.avatar"
+                                        :src="avatarUrl(row.profileUuid)"
                                         :alt="row.name"
                                     />
                                     <AvatarFallback class="text-xs font-bold">

@@ -22,6 +22,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import UserMenuContent from '@/components/UserMenuContent.vue';
+import { avatarUrl } from '@/composables/useAvatar';
 import { useCurrentUrl } from '@/composables/useCurrentUrl';
 import { getInitials } from '@/composables/useInitials';
 import { GITHUB_REPOSITORY_URL } from '@/lib/site';
@@ -128,17 +129,17 @@ const navItems = computed<NavItem[]>(() => {
                             class="wod-nav-ghost rounded-md"
                         >
                             <Avatar
-                                class="size-8 overflow-hidden rounded-md border-2 border-foreground"
+                                class="size-8 overflow-hidden rounded-md border-2 border-foreground bg-black"
                             >
                                 <AvatarImage
-                                    v-if="user.avatar"
-                                    :src="user.avatar"
-                                    :alt="user.name"
+                                    v-if="user.profile_uuid"
+                                    :src="avatarUrl(user.profile_uuid)"
+                                    :alt="user.game_display_name ?? user.name"
                                 />
                                 <AvatarFallback
                                     class="rounded-md bg-card text-xs font-bold"
                                 >
-                                    {{ getInitials(user.name) }}
+                                    {{ getInitials(user.game_display_name ?? user.name) }}
                                 </AvatarFallback>
                             </Avatar>
                         </Button>

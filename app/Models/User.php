@@ -25,7 +25,16 @@ class User extends Authenticatable
             if (! is_string($user->profile_uuid) || $user->profile_uuid === '') {
                 $user->profile_uuid = (string) Str::uuid();
             }
+
+            if (! is_string($user->game_display_name) || $user->game_display_name === '') {
+                $user->game_display_name = self::generatePlayerTag();
+            }
         });
+    }
+
+    public static function generatePlayerTag(): string
+    {
+        return 'Commander#'.str_pad((string) random_int(1000, 9999), 4, '0', STR_PAD_LEFT);
     }
 
     /**

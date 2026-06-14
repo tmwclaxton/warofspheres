@@ -56,6 +56,7 @@ class GameController extends Controller
         return Inertia::render('games/Lobby', [
             'lobbies' => $lobbies,
             'publishedMaps' => $publishedMaps,
+            'playerTag' => $request->user()?->game_display_name,
         ]);
     }
 
@@ -210,7 +211,7 @@ class GameController extends Controller
 
     public function start(Request $request, Game $game, GameManager $gameManager): RedirectResponse
     {
-        $gameManager->beginCountdown($game, $request->user());
+        $gameManager->start($game, $request->user());
 
         return to_route('games.show', $game);
     }
@@ -580,27 +581,18 @@ class GameController extends Controller
         $isParticipant = ($userId !== null && $game->players->contains('user_id', $userId))
             || ($guestKey !== null && $game->players->contains('guest_key', $guestKey));
 
-        $myPlayer = null;
-        if ($userId !== null) {
-            $myPlayer = $game->players->firstWhere('user_id', $userId);
-        } elseif ($guestKey !== null) {
-            $myPlayer = $game->players->firstWhere('guest_key', $guestKey);
-        }
-
         return [
             'uuid' => $game->uuid,
             'code' => $game->code,
             'status' => $game->status->value,
             'maxPlayers' => $game->max_players,
             'playerCount' => $game->players->count(),
-            'isHost' => $userId !== null && $game->host_user_id === $userId,
+            'isHost' => $userId !== null && $game->host_user_id !== null && $game->host_user_id === $userId,
             'isParticipant' => $isParticipant,
             'canStart' => $game->canStart(),
-            'hostName' => $game->host?->name,
-            'countdownStartedAt' => $game->countdown_started_at?->toIso8601String(),
-            'mySlot' => $myPlayer?->slot,
-            'myColor' => $myPlayer?->color,
-            'myDisplayName' => $myPlayer?->displayLabel(),
+            'hostName' => $game->host !== null
+                ? ($game->host->game_display_name ?: $game->host->name)
+                : null,
             'players' => $game->players->sortBy('slot')->values()->map(fn (GamePlayer $player) => [
                 'slot' => $player->slot,
                 'name' => $player->displayLabel(),
@@ -611,6 +603,17 @@ class GameController extends Controller
             'mapPreviewData' => $mapPreviewData,
             'abortedReason' => ($game->settings ?? [])['aborted_reason'] ?? null,
         ];
+    }
+
+    public function updatePlayerTag(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'player_tag' => ['required', 'string', 'max:50'],
+        ]);
+
+        $request->user()->update(['game_display_name' => $validated['player_tag']]);
+
+        return back();
     }
 
     /**

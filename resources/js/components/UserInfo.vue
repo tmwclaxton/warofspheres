@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { avatarUrl } from '@/composables/useAvatar';
 import { useInitials } from '@/composables/useInitials';
 import type { User } from '@/types';
 
@@ -15,16 +16,16 @@ const props = withDefaults(defineProps<Props>(), {
 
 const { getInitials } = useInitials();
 
-const showAvatar = computed(
-    () => props.user.avatar && props.user.avatar !== '',
+const avatarSrc = computed(() =>
+    props.user.profile_uuid ? avatarUrl(props.user.profile_uuid) : null,
 );
 </script>
 
 <template>
-    <Avatar class="h-8 w-8 overflow-hidden rounded-lg">
-        <AvatarImage v-if="showAvatar" :src="user.avatar!" :alt="user.name" />
+    <Avatar class="h-8 w-8 overflow-hidden rounded-lg bg-black">
+        <AvatarImage v-if="avatarSrc" :src="avatarSrc" :alt="user.game_display_name ?? user.name" />
         <AvatarFallback class="rounded-lg text-black dark:text-white">
-            {{ getInitials(user.name) }}
+            {{ getInitials(user.game_display_name ?? user.name) }}
         </AvatarFallback>
     </Avatar>
 

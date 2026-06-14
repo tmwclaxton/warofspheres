@@ -259,7 +259,6 @@ function draw() {
     const state = store.latestState;
 
     if (state) {
-        drawFog(ctx, state.vision, state.territory);  // dims enemy territory only
         drawTerritory(ctx, state.territory, state.playerColors); // battle lines on top
     }
 
@@ -344,7 +343,8 @@ function drawFog(
 }
 
 /**
- * Draws smooth territory-boundary lines across the whole map.
+ * Draws smooth territory-boundary lines across the whole map, with each
+ * player's borders rendered in their own player color.
  *
  * Every cell is owned by whoever has the highest border influence
  * (no threshold — the whole map is always fully divided).  Only the
@@ -352,15 +352,15 @@ function drawFog(
  *
  * Algorithm
  * ---------
- * 1. Collect every boundary edge: the shared side between two cells
- *    owned by different players.  Each edge is a segment between two
- *    grid corners at pixel position (cx*cellSize, cy*cellSize).
- * 2. Build a corner adjacency graph, then walk it greedily — preferring
- *    straight continuation at junctions — to assemble edges into the
- *    longest possible polylines.
- * 3. Render each polyline using quadratic-Bézier midpoint smoothing:
- *    straight stretches stay perfectly straight; direction-changes
- *    become smooth arcs — the "marker-pen on a map" aesthetic.
+ * 1. For each cell, collect boundary edges (shared sides with differently-owned
+ *    neighbours) and assign each edge to the owning player (the cell we are
+ *    currently iterating).  This keeps each edge in exactly one player's set.
+ * 2. Per player: build a corner adjacency graph, then walk it greedily —
+ *    preferring straight continuation at junctions — to assemble edges into
+ *    the longest possible polylines.
+ * 3. Render each player's polylines using quadratic-Bézier midpoint smoothing
+ *    in that player's color:  straight stretches stay perfectly straight;
+ *    direction-changes become smooth arcs — the "marker-pen on a map" aesthetic.
  */
 function drawTerritory(
     ctx: CanvasRenderingContext2D,
@@ -375,19 +375,20 @@ function drawTerritory(
     const w = territory.length;
     const h = territory[0].length;
 
-    // ── 1. Build boundary-edge graph ────────────────────────────────────────
-    // Corner (cx, cy) has pixel position (cx*cellSize, cy*cellSize).
-    // Corners are indexed as:  cx * (h + 1) + cy
-
     const cH = h + 1; // stride for corner-index encoding
-    // adjacency: cornerIndex → Set<neighborCornerIndex>
-    const adj = new Map<number, Set<number>>();
 
     function ci(cx: number, cy: number): number {
         return cx * cH + cy;
     }
 
-    function link(cx1: number, cy1: number, cx2: number, cy2: number): void {
+    // ── 1. Build per-player boundary-edge adjacency graphs ──────────────────
+    // Each boundary edge is assigned to the player whose cell we are currently
+    // iterating, so every edge belongs to exactly one player's graph.
+    const playerAdj = new Map<number, Map<number, Set<number>>>();
+
+    function playerLink(slot: number, cx1: number, cy1: number, cx2: number, cy2: number): void {
+        if (!playerAdj.has(slot)) playerAdj.set(slot, new Map());
+        const adj = playerAdj.get(slot)!;
         const a = ci(cx1, cy1);
         const b = ci(cx2, cy2);
         if (!adj.has(a)) adj.set(a, new Set());
@@ -399,20 +400,18 @@ function drawTerritory(
     for (let gx = 0; gx < w; gx++) {
         for (let gy = 0; gy < h; gy++) {
             const owner = territory[gx][gy];
-            // horizontal edge: boundary below this cell
+            // horizontal edge: boundary below this cell — assigned to current cell's owner
             if (gy + 1 < h && territory[gx][gy + 1] !== owner) {
-                link(gx, gy + 1, gx + 1, gy + 1);
+                playerLink(owner, gx, gy + 1, gx + 1, gy + 1);
             }
-            // vertical edge: boundary to the right of this cell
+            // vertical edge: boundary to the right — assigned to current cell's owner
             if (gx + 1 < w && territory[gx + 1][gy] !== owner) {
-                link(gx + 1, gy, gx + 1, gy + 1);
+                playerLink(owner, gx + 1, gy, gx + 1, gy + 1);
             }
         }
     }
 
-    // ── 3. Trace polylines ──────────────────────────────────────────────────
-    const usedEdges = new Set<string>();
-
+    // ── 2 & 3. Per player: trace polylines and draw in player color ──────────
     function ek(a: number, b: number): string {
         return a < b ? `${a}|${b}` : `${b}|${a}`;
     }
@@ -423,110 +422,101 @@ function drawTerritory(
         return [cx * cellSize, cy * cellSize];
     }
 
-    const polylines: [number, number][][] = [];
-
-    // Prefer to start from endpoints (corners with odd degree) so closed
-    // loops are handled after all open paths are exhausted.
-    const starts: number[] = [];
-    for (const [c, nbrs] of adj) {
-        if (nbrs.size % 2 !== 0) starts.push(c); // open-path endpoint
-    }
-    for (const [c] of adj) {
-        starts.push(c); // ensures closed loops are also picked up
-    }
-
-    for (const seed of starts) {
-        const seedNbrs = adj.get(seed);
-        if (!seedNbrs) continue;
-
-        for (const firstNbr of seedNbrs) {
-            const eKey = ek(seed, firstNbr);
-            if (usedEdges.has(eKey)) continue;
-
-            // Walk the path greedily, preferring to continue straight when at
-            // an X-junction by picking the neighbour most "in-line" with the
-            // incoming direction.
-            const poly: [number, number][] = [];
-            poly.push(cpx(seed));
-
-            let prev = seed;
-            let cur = firstNbr;
-            usedEdges.add(eKey);
-
-            while (true) {
-                poly.push(cpx(cur));
-                const nbrs = adj.get(cur);
-                if (!nbrs) break;
-
-                // Compute incoming direction to prefer straight continuation.
-                const [px0, py0] = cpx(prev);
-                const [cx0, cy0] = cpx(cur);
-                const dx = cx0 - px0;
-                const dy = cy0 - py0;
-
-                let bestNext = -1;
-                let bestDot = -Infinity;
-
-                for (const n of nbrs) {
-                    if (usedEdges.has(ek(cur, n))) continue;
-                    const [nx, ny] = cpx(n);
-                    const ndx = nx - cx0;
-                    const ndy = ny - cy0;
-                    // Dot product with incoming direction (higher = more straight)
-                    const dot = dx * ndx + dy * ndy;
-                    if (dot > bestDot) {
-                        bestDot = dot;
-                        bestNext = n;
-                    }
-                }
-
-                if (bestNext === -1) break;
-
-                usedEdges.add(ek(cur, bestNext));
-                prev = cur;
-                cur = bestNext;
-            }
-
-            if (poly.length >= 2) {
-                polylines.push(poly);
-            }
-        }
-    }
-
-    // ── 3. Draw polylines with Bézier midpoint smoothing ────────────────────
     ctx.save();
     ctx.lineWidth = 2.5;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.strokeStyle = canvasInk();
-    ctx.globalAlpha = 0.55;
+    ctx.globalAlpha = 0.75;
     ctx.shadowColor = 'rgba(0,0,0,0.3)';
     ctx.shadowBlur = 3;
 
-    for (const poly of polylines) {
-        if (poly.length < 2) continue;
-        ctx.beginPath();
+    for (const [slot, adj] of playerAdj) {
+        const color = playerColors[slot];
+        if (!color) continue;
+        ctx.strokeStyle = `rgba(${color[0]},${color[1]},${color[2]},1)`;
 
-        if (poly.length === 2) {
-            ctx.moveTo(poly[0][0], poly[0][1]);
-            ctx.lineTo(poly[1][0], poly[1][1]);
-        } else {
-            // Midpoint-smoothing: straight sections stay straight;
-            // direction-changes become quadratic Bézier arcs.
-            const mx0 = (poly[0][0] + poly[1][0]) / 2;
-            const my0 = (poly[0][1] + poly[1][1]) / 2;
-            ctx.moveTo(mx0, my0);
+        const usedEdges = new Set<string>();
 
-            for (let i = 1; i < poly.length - 1; i++) {
-                const mx = (poly[i][0] + poly[i + 1][0]) / 2;
-                const my = (poly[i][1] + poly[i + 1][1]) / 2;
-                ctx.quadraticCurveTo(poly[i][0], poly[i][1], mx, my);
-            }
-
-            ctx.lineTo(poly[poly.length - 1][0], poly[poly.length - 1][1]);
+        // Prefer to start from endpoints (odd-degree corners) so closed loops
+        // are handled after all open paths are exhausted.
+        const starts: number[] = [];
+        for (const [c, nbrs] of adj) {
+            if (nbrs.size % 2 !== 0) starts.push(c);
+        }
+        for (const [c] of adj) {
+            starts.push(c);
         }
 
-        ctx.stroke();
+        for (const seed of starts) {
+            const seedNbrs = adj.get(seed);
+            if (!seedNbrs) continue;
+
+            for (const firstNbr of seedNbrs) {
+                const eKey = ek(seed, firstNbr);
+                if (usedEdges.has(eKey)) continue;
+
+                // Walk greedily, preferring straight continuation at junctions.
+                const poly: [number, number][] = [];
+                poly.push(cpx(seed));
+
+                let prev = seed;
+                let cur = firstNbr;
+                usedEdges.add(eKey);
+
+                while (true) {
+                    poly.push(cpx(cur));
+                    const nbrs = adj.get(cur);
+                    if (!nbrs) break;
+
+                    const [px0, py0] = cpx(prev);
+                    const [cx0, cy0] = cpx(cur);
+                    const dx = cx0 - px0;
+                    const dy = cy0 - py0;
+
+                    let bestNext = -1;
+                    let bestDot = -Infinity;
+
+                    for (const n of nbrs) {
+                        if (usedEdges.has(ek(cur, n))) continue;
+                        const [nx, ny] = cpx(n);
+                        const ndx = nx - cx0;
+                        const ndy = ny - cy0;
+                        const dot = dx * ndx + dy * ndy;
+                        if (dot > bestDot) {
+                            bestDot = dot;
+                            bestNext = n;
+                        }
+                    }
+
+                    if (bestNext === -1) break;
+
+                    usedEdges.add(ek(cur, bestNext));
+                    prev = cur;
+                    cur = bestNext;
+                }
+
+                if (poly.length < 2) continue;
+
+                ctx.beginPath();
+                if (poly.length === 2) {
+                    ctx.moveTo(poly[0][0], poly[0][1]);
+                    ctx.lineTo(poly[1][0], poly[1][1]);
+                } else {
+                    // Midpoint-smoothing: straight sections stay straight;
+                    // direction-changes become smooth quadratic Bézier arcs.
+                    const mx0 = (poly[0][0] + poly[1][0]) / 2;
+                    const my0 = (poly[0][1] + poly[1][1]) / 2;
+                    ctx.moveTo(mx0, my0);
+                    for (let i = 1; i < poly.length - 1; i++) {
+                        const mx = (poly[i][0] + poly[i + 1][0]) / 2;
+                        const my = (poly[i][1] + poly[i + 1][1]) / 2;
+                        ctx.quadraticCurveTo(poly[i][0], poly[i][1], mx, my);
+                    }
+                    ctx.lineTo(poly[poly.length - 1][0], poly[poly.length - 1][1]);
+                }
+                ctx.stroke();
+            }
+        }
     }
 
     ctx.restore();

@@ -575,59 +575,64 @@ final class Environment
     /**
      * @param  array{0: float, 1: float}  $troopPosition
      */
-    private function supplyLineEnemyPressure(Player $player, array $troopPosition): float
+    /**
+     * Returns true if the troop's grid cell is owned by the given player (or a teammate).
+     *
+     * Territory ownership mirrors the scoring used in drawInfo(): each cell belongs to
+     * whichever player has the highest combined score of border-brush influence (×5) and
+     * Voronoi proximity to their nearest anchor (start position or owned city).
+     */
+    private function isInOwnTerritory(Player $player, array $troopPosition): bool
     {
-        $owned = array_values(array_map(
-            fn (City $city) => $city->position,
-            array_filter($this->cities, fn (City $city) => $city->owner === $player),
-        ));
+        $cs = GameConstants::CELL_SIZE;
+        $gx = (int) ($troopPosition[0] / $cs);
+        $gy = (int) ($troopPosition[1] / $cs);
+        $cx = ($gx + 0.5) * $cs;
+        $cy = ($gy + 0.5) * $cs;
 
-        if ($owned === []) {
-            return 0.0;
-        }
+        $mapW = ($this->gridMaxX + 1) * $cs;
+        $mapH = ($this->gridMaxY + 1) * $cs;
+        $voronoiScale = (float) max($mapW, $mapH);
+        $scaleSq = $voronoiScale * $voronoiScale;
 
-        $closestCity = $owned[0];
-        $closestDist = PHP_FLOAT_MAX;
-        foreach ($owned as $cityPos) {
-            [, $dist] = GameMath::xyToDirDis([$troopPosition[0] - $cityPos[0], $troopPosition[1] - $cityPos[1]]);
-            if ($dist < $closestDist) {
-                $closestCity = $cityPos;
-                $closestDist = $dist;
+        $bestScore = -1.0;
+        $bestPlayer = $this->players[0];
+
+        foreach ($this->players as $p) {
+            $influence = $p->border->grid[$gx][$gy] ?? 0.0;
+
+            $anchors = [[$p->startPos[0], $p->startPos[1]]];
+            foreach ($this->cities as $city) {
+                if ($city->owner === $p) {
+                    $anchors[] = $city->position;
+                }
+            }
+
+            $minDistSq = PHP_FLOAT_MAX;
+            foreach ($anchors as [$ax, $ay]) {
+                $dx = $ax - $cx;
+                $dy = $ay - $cy;
+                $distSq = $dx * $dx + $dy * $dy;
+                if ($distSq < $minDistSq) {
+                    $minDistSq = $distSq;
+                }
+            }
+
+            $proximity = $scaleSq / ($scaleSq + $minDistSq);
+            $score = $influence * 5.0 + $proximity;
+
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $bestPlayer = $p;
             }
         }
 
-        [$cityDir, $cityDist] = GameMath::xyToDirDis([
-            $troopPosition[0] - $closestCity[0],
-            $troopPosition[1] - $closestCity[1],
-        ]);
-        $samplePoints = [];
-        for ($dist = 0; $dist < (int) ($cityDist / 20); $dist++) {
-            $samplePoints[] = GameMath::dirDisToXy($cityDir, $dist * 20);
+        if ($bestPlayer === $player) {
+            return true;
         }
 
-        if ($samplePoints === []) {
-            return 0.0;
-        }
-
-        $borderAvgs = [];
-        foreach ($this->players as $otherPlayer) {
-            if ($otherPlayer === $player) {
-                continue;
-            }
-
-            $sum = 0.0;
-            foreach ($samplePoints as $sample) {
-                $sum += $otherPlayer->border->getGridValue(
-                    ($closestCity[0] + $sample[0]) / GameConstants::CELL_SIZE,
-                    ($closestCity[1] + $sample[1]) / GameConstants::CELL_SIZE,
-                );
-            }
-            $borderAvgs[] = $sum / count($samplePoints);
-        }
-
-        $borderAvg = $borderAvgs === [] ? 0.0 : (array_sum($borderAvgs) / count($borderAvgs));
-
-        return min(1.0, $borderAvg / 2.0);
+        // In team games a troop is safe inside any teammate's territory.
+        return $player->teamIndex > 0 && $bestPlayer->teamIndex === $player->teamIndex;
     }
 
     /**
@@ -777,52 +782,13 @@ final class Environment
                     array_filter($this->cities, fn (City $city) => $city->owner === $player),
                 ));
 
-                if ($owned !== []) {
-                    $closestCity = $owned[0];
-                    $closestDist = PHP_FLOAT_MAX;
-                    foreach ($owned as $cityPos) {
-                        [, $dist] = GameMath::xyToDirDis([$oldPos[0] - $cityPos[0], $oldPos[1] - $cityPos[1]]);
-                        if ($dist < $closestDist) {
-                            $closestCity = $cityPos;
-                            $closestDist = $dist;
-                        }
-                    }
+                $inOwnTerritory = $this->isInOwnTerritory($player, $troop->position);
 
-                    [$cityDir, $cityDist] = GameMath::xyToDirDis([$oldPos[0] - $closestCity[0], $oldPos[1] - $closestCity[1]]);
-                    $samplePoints = [];
-                    for ($dist = 0; $dist < (int) ($cityDist / 20); $dist++) {
-                        $samplePoints[] = GameMath::dirDisToXy($cityDir, $dist * 20);
-                    }
-
-                    $borderAvg = 0;
-                    if ($samplePoints !== []) {
-                        $borderAvgs = [];
-                        foreach ($this->players as $otherPlayer) {
-                            if ($otherPlayer === $player) {
-                                continue;
-                            }
-
-                            $sum = 0.0;
-                            foreach ($samplePoints as $sample) {
-                                $sum += $otherPlayer->border->getGridValue(
-                                    ($closestCity[0] + $sample[0]) / GameConstants::CELL_SIZE,
-                                    ($closestCity[1] + $sample[1]) / GameConstants::CELL_SIZE,
-                                );
-                            }
-                            $borderAvgs[] = $sum / count($samplePoints);
-                        }
-                        $borderAvg = (int) (array_sum($borderAvgs) / count($borderAvgs));
-                        $distPenal = max((($cityDist + 250) / 1000), 0.5);
-                        $healingPower = (1 - ($borderAvg / 2)) - $distPenal;
-                    } else {
-                        $healingPower = -0.5;
-                    }
-
-                    $troop->health += (int) ($healingPower / 25);
-                    if ($troop->health > $troop->maxHealth()) {
-                        $troop->health = $troop->maxHealth();
-                    }
-                }
+                // Heal when in own territory and not starving (starvation is handled separately).
+                // Healing is intentionally deferred until after combat resolution below so that
+                // $inCombat can suppress it; a troop reference is passed through by value so we
+                // update health after the combat block instead.
+                $shouldHeal = $inOwnTerritory && $owned !== [];
 
                 $enemiesInRange = [];
 
@@ -905,25 +871,30 @@ final class Environment
                     $enemiesInRange[0][0]->health -= $attackPower;
                 }
 
-                $supplyPressure = $this->supplyLineEnemyPressure($player, $troop->position);
                 $inCombat = $enemiesInRange !== [];
-                $hasFriendlyCity = $owned !== [];
+
+                // Morale: territory-based encirclement replaces the old supply-line distance check.
+                // Being inside own territory (or a teammate's) is sufficient to recover morale.
+                // Being caught in enemy territory — whether fighting or not — drains morale.
                 if ($inCombat) {
                     $drain = GameConstants::TROOP_MORALE_COMBAT_DRAIN;
-                    if ($supplyPressure >= GameConstants::TROOP_SUPPLY_CUT_THRESHOLD) {
-                        $drain += GameConstants::TROOP_SUPPLY_CUT_MORALE_DRAIN * $supplyPressure;
+                    if (! $inOwnTerritory) {
+                        $drain += GameConstants::TROOP_SUPPLY_CUT_MORALE_DRAIN;
                     }
                     $troop->morale = (int) round($troop->morale - $drain);
-                } elseif ($hasFriendlyCity) {
+                } elseif ($inOwnTerritory) {
                     $troop->morale = (int) round($troop->morale + GameConstants::TROOP_MORALE_REST_GAIN);
-                    if ($supplyPressure >= GameConstants::TROOP_SUPPLY_CUT_THRESHOLD) {
-                        $troop->morale = (int) round($troop->morale - GameConstants::TROOP_SUPPLY_CUT_MORALE_DRAIN * 0.35);
-                    }
-                } elseif ($supplyPressure >= GameConstants::TROOP_SUPPLY_CUT_THRESHOLD) {
+                } else {
+                    // Encircled: in enemy territory, not in active combat.
                     $troop->morale = (int) round($troop->morale - GameConstants::TROOP_SUPPLY_CUT_MORALE_DRAIN * 0.55);
                 }
 
                 $troop->morale = max(GameConstants::TROOP_MORALE_MIN, min(GameConstants::TROOP_MORALE_MAX, $troop->morale));
+
+                // Apply healing after combat so we can suppress it while in combat.
+                if ($shouldHeal && ! $inCombat && $troop->health < $troop->maxHealth()) {
+                    $troop->health = min($troop->maxHealth(), $troop->health + 1);
+                }
 
                 // Ship / water conversion logic.
                 $isWaterTerrain = in_array($onTerrain, ['water', 'deep_water', 'river']);

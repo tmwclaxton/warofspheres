@@ -20,6 +20,7 @@ class UserFactory extends Factory
     {
         return [
             'name' => fake()->name(),
+            'game_display_name' => User::generatePlayerTag(),
             'email' => fake()->unique()->safeEmail(),
             'email_verified_at' => now(),
             'workos_id' => 'fake-'.Str::random(10),

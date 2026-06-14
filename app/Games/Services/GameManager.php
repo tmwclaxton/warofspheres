@@ -18,6 +18,7 @@ use App\Models\GamePlayer;
 use App\Models\Map;
 use App\Models\QuickStartEntry;
 use App\Models\User;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -27,6 +28,12 @@ use Illuminate\Support\Str;
 final class GameManager
 {
     private const string ACTIVE_SET = 'games:active';
+
+    /**
+     * Seconds a quick-start player must wait before the system creates a new
+     * game on their behalf (when no existing lobby is available to fill).
+     */
+    public const int QUICK_START_CREATE_AFTER_SECONDS = 10;
 
     /**
      * Refreshed by {@see \App\Console\Commands\GameTickCommand} each loop iteration while the daemon runs.
@@ -129,7 +136,7 @@ final class GameManager
             return;
         }
 
-        if ($user !== null && $game->host_user_id === $user->id) {
+        if ($user !== null && $game->host_user_id !== null && $game->host_user_id === $user->id) {
             // Host leaves → cancel the lobby.
             $game->update(['status' => GameStatus::Finished, 'aborted_reason' => 'host_left']);
 
@@ -172,12 +179,17 @@ final class GameManager
             $label = null;
         }
 
+        // Auto-generate a name for guests who didn't provide one.
+        if ($label === null) {
+            $label = 'Guest'.random_int(10000, 99999);
+        }
+
         $slot = $game->players()->count();
 
         $player = $game->players()->create([
             'user_id' => null,
             'guest_key' => $guestUuid,
-            'display_name' => $label !== null ? Str::limit($label, 50, '') : null,
+            'display_name' => Str::limit($label, 50, ''),
             'slot' => $slot,
             'color' => GameConstants::colorHex($slot),
         ]);
@@ -302,19 +314,19 @@ final class GameManager
     }
 
     /**
-     * Starts the countdown when all slots are filled, giving players 10 seconds
-     * to customise their profile before the game launches.
+     * Auto-launches quick-start games immediately when all slots are filled.
+     * Private lobbies (not quick-start) wait for the host to press Start.
      */
     private function autoStartIfFull(Game $game): void
     {
         $game->unsetRelation('players');
-        if (! $game->canStart() || $game->countdown_started_at !== null) {
+
+        $isQuickStart = (bool) (($game->settings ?? [])['quick_start_created'] ?? false);
+        if (! $isQuickStart || ! $game->canStart()) {
             return;
         }
 
-        $game->update(['countdown_started_at' => now()]);
-
-        LaunchLobbyJob::dispatch($game->id)->delay(now()->addSeconds(10));
+        $this->launch($game);
     }
 
     /**
@@ -324,6 +336,11 @@ final class GameManager
      * so games that only need 1–2 more players complete before emptier ones.
      * Only fill a lobby when the queue has enough players to completely fill it,
      * so no one gets stuck in a half-filled lobby waiting for more quick-starters.
+     *
+     * If no open lobbies can be filled and ≥ 2 players have been waiting at least
+     * {@see QUICK_START_CREATE_AFTER_SECONDS} seconds, a new game is automatically
+     * created from the most-liked published map whose team count fits the queue.
+     * This repeats until the remaining ready queue drops below 2.
      */
     public function runQuickStart(): void
     {
@@ -351,46 +368,197 @@ final class GameManager
                 ->sortBy('openSlots') // fewest open slots first
                 ->values();
 
-            if ($lobbies->isEmpty()) {
-                return;
-            }
-
             $remaining = $queue->values();
 
-            foreach ($lobbies as $row) {
-                /** @var Game $game */
-                $game = $row['game'];
-                $need = $row['openSlots'];
+            if ($lobbies->isNotEmpty()) {
+                foreach ($lobbies as $row) {
+                    /** @var Game $game */
+                    $game = $row['game'];
+                    $need = $row['openSlots'];
 
-                if ($remaining->count() < $need) {
-                    continue; // not enough queued players to fill this lobby
-                }
-
-                $batch = $remaining->take($need);
-                $remaining = $remaining->slice($need)->values();
-
-                foreach ($batch as $entry) {
-                    try {
-                        if ($entry->user_id !== null) {
-                            $user = User::find($entry->user_id);
-                            if ($user !== null) {
-                                $this->join($game, $user);
-                            }
-                        } elseif ($entry->guest_key !== null) {
-                            $this->joinAsGuest($game, $entry->guest_key, null);
-                        }
-                    } catch (\Throwable) {
-                        // If joining fails (e.g. lobby filled mid-transaction), skip gracefully.
+                    if ($remaining->count() < $need) {
+                        continue; // not enough queued players to fill this lobby
                     }
 
-                    $entry->update(['status' => 'matched', 'game_id' => $game->id]);
-                }
+                    $batch = $remaining->take($need);
+                    $remaining = $remaining->slice($need)->values();
 
-                if ($remaining->isEmpty()) {
-                    break;
+                    foreach ($batch as $entry) {
+                        try {
+                            if ($entry->user_id !== null) {
+                                $user = User::find($entry->user_id);
+                                if ($user !== null) {
+                                    $this->join($game, $user);
+                                }
+                            } elseif ($entry->guest_key !== null) {
+                                $this->joinAsGuest($game, $entry->guest_key, null);
+                            }
+                        } catch (\Throwable) {
+                            // If joining fails (e.g. lobby filled mid-transaction), skip gracefully.
+                        }
+
+                        $entry->update(['status' => 'matched', 'game_id' => $game->id]);
+                    }
+
+                    if ($remaining->isEmpty()) {
+                        break;
+                    }
                 }
             }
+
+            // Auto-create games for players who have waited long enough and
+            // could not be placed into an existing lobby.
+            $this->autoCreateQuickStartGames($remaining);
         });
+    }
+
+    /**
+     * Creates one or more new games for quick-start players who have been
+     * waiting at least {@see QUICK_START_CREATE_AFTER_SECONDS} seconds and
+     * could not be matched into an existing lobby.
+     *
+     * Rules:
+     *  - At least 2 ready players (waited ≥ threshold) are required.
+     *  - The most-liked published map whose teamCount fits the ready group is chosen.
+     *  - If no map matches exactly, the largest map whose teamCount ≤ ready count is used.
+     *  - Guest-only batches are supported; host_user_id will be null for those games.
+     *  - This repeats until fewer than 2 ready players remain.
+     *
+     * @param  Collection<int, QuickStartEntry>  $unmatched
+     */
+    private function autoCreateQuickStartGames(Collection $unmatched): void
+    {
+        $readyAt = now()->subSeconds(self::QUICK_START_CREATE_AFTER_SECONDS);
+
+        // Only consider players who have been waiting long enough.
+        $ready = $unmatched->filter(
+            fn (QuickStartEntry $e) => $e->created_at <= $readyAt
+        )->values();
+
+        while ($ready->count() >= GameConstants::MIN_PLAYERS) {
+            $playerCount = $ready->count();
+
+            // Find the best published map: exact teamCount match preferred,
+            // then largest teamCount that fits within the ready count, both
+            // ordered by likes_count descending to prefer popular maps.
+            // Sorting is done in PHP to remain database-agnostic (data is a JSON column).
+            $map = Map::query()
+                ->where('published', true)
+                ->orderByDesc('likes_count')
+                ->get()
+                ->filter(function (Map $m) use ($playerCount): bool {
+                    $teamCount = (int) ($m->data['teamCount'] ?? 0);
+
+                    return $teamCount >= GameConstants::MIN_PLAYERS && $teamCount <= $playerCount;
+                })
+                ->sortBy(function (Map $m) use ($playerCount): array {
+                    $teamCount = (int) ($m->data['teamCount'] ?? 0);
+
+                    // Sort ascending: exact match → 0, non-exact → 1 (exact comes first).
+                    // Then prefer larger team counts (negate for ascending sort).
+                    // likes_count already sorted descending by the DB query.
+                    return [($teamCount === $playerCount) ? 0 : 1, -$teamCount];
+                })
+                ->first();
+
+            if ($map === null) {
+                break; // No suitable published map available.
+            }
+
+            $mapTeamCount = (int) ($map->data['teamCount'] ?? 0);
+            if ($mapTeamCount < GameConstants::MIN_PLAYERS) {
+                break;
+            }
+
+            $batch = $ready->take($mapTeamCount);
+
+            // Use the first authenticated user as host if one exists; guests can play without one.
+            $hostEntry = $batch->first(fn (QuickStartEntry $e) => $e->user_id !== null);
+            $host = $hostEntry !== null ? User::find($hostEntry->user_id) : null;
+
+            try {
+                $game = $this->createForQuickStart($host, $map);
+            } catch (\Throwable) {
+                break;
+            }
+
+            // Join all batch members and mark them as matched.
+            // The host (if any) was already joined inside createForQuickStart.
+            foreach ($batch as $entry) {
+                $entry->update(['status' => 'matched', 'game_id' => $game->id]);
+
+                if ($hostEntry !== null && $entry->id === $hostEntry->id) {
+                    continue;
+                }
+
+                try {
+                    if ($entry->user_id !== null) {
+                        $user = User::find($entry->user_id);
+                        if ($user !== null) {
+                            $this->join($game, $user);
+                        }
+                    } elseif ($entry->guest_key !== null) {
+                        $this->joinAsGuest($game, $entry->guest_key, null);
+                    }
+                } catch (\Throwable) {
+                    // Skip gracefully if a slot was taken mid-transaction.
+                }
+            }
+
+            $ready = $ready->slice($mapTeamCount)->values();
+        }
+    }
+
+    /**
+     * Creates a lobby for the quick-start auto-match flow.
+     * Unlike {@see create()}, this does NOT trigger another runQuickStart() call
+     * to prevent infinite recursion. Supports a null host for guest-only games.
+     */
+    private function createForQuickStart(?User $host, Map $map): Game
+    {
+        $data = $map->data;
+        if (! is_array($data)) {
+            abort(422, 'This map has invalid data.');
+        }
+
+        $errors = MapMarkers::validate($data);
+        if ($errors !== []) {
+            abort(422, implode(' ', $errors));
+        }
+
+        $teamCount = (int) $data['teamCount'];
+        $teamCount = max(GameConstants::MIN_PLAYERS, min(GameConstants::MAX_PLAYERS, $teamCount));
+
+        $map->loadMissing('user');
+
+        $snapshot = [
+            'source_uuid' => $map->uuid,
+            'source_name' => $map->name,
+            'source_author' => $map->user?->name ?? 'Unknown',
+            'data' => $data,
+        ];
+
+        $game = Game::query()->create([
+            'uuid' => (string) Str::uuid(),
+            'code' => $this->codeGenerator->generate(),
+            'status' => GameStatus::Lobby,
+            'max_players' => $teamCount,
+            'seed' => random_int(1, PHP_INT_MAX),
+            'host_user_id' => $host?->id,
+            'map_id' => $map->id,
+            'map_data' => $snapshot,
+            'settings' => [
+                'source_map_uuid' => $map->uuid,
+                'source_map_name' => $map->name,
+                'quick_start_created' => true,
+            ],
+        ]);
+
+        if ($host !== null) {
+            $this->join($game, $host);
+        }
+
+        return $game->fresh(['players.user']);
     }
 
     /**

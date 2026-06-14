@@ -66,6 +66,7 @@ Route::middleware(['auth'])->group(function () {
     Route::post('games', [GameController::class, 'store'])->name('games.store');
     Route::post('games/{game}/start', [GameController::class, 'start'])->name('games.start');
     Route::patch('games/{game}/player-profile', [GameController::class, 'updatePlayerProfile'])->name('games.player-profile');
+    Route::patch('player-tag', [GameController::class, 'updatePlayerTag'])->name('player-tag.update');
 });
 
 require __DIR__.'/settings.php';
